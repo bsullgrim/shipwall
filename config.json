@@ -1,0 +1,311 @@
+{
+  "_comment": "Filename->key mapping + accurate livery palettes (built from suggest_palette.py). Crests collapse to a fleck but colors stay true. bg:none for transparent stacks.",
+  "ALGOMA": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        236,
+        32,
+        43
+      ],
+      [
+        235,
+        235,
+        235
+      ]
+    ]
+  },
+  "CSL": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        236,
+        32,
+        43
+      ],
+      [
+        235,
+        235,
+        235
+      ]
+    ]
+  },
+  "INTERLAKE": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        236,
+        32,
+        43
+      ],
+      [
+        215,
+        215,
+        215
+      ]
+    ]
+  },
+  "ASC": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        149,
+        18,
+        44
+      ],
+      [
+        170,
+        170,
+        170
+      ]
+    ],
+    "file": "Stack-ASC.png"
+  },
+  "LOWERLAKES": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        235,
+        235,
+        235
+      ],
+      [
+        200,
+        200,
+        200
+      ],
+      [
+        158,
+        85,
+        85
+      ]
+    ],
+    "file": "Stack-LLT-GRN.png"
+  },
+  "ANDRIE": {
+    "bg": "none",
+    "palette": [
+      [
+        2,
+        97,
+        156
+      ],
+      [
+        235,
+        235,
+        235
+      ],
+      [
+        40,
+        40,
+        40
+      ]
+    ],
+    "file": "Stack-Andrie.png"
+  },
+  "CLIFFS": {
+    "bg": "none",
+    "palette": [
+      [
+        204,
+        204,
+        204
+      ],
+      [
+        35,
+        47,
+        64
+      ],
+      [
+        236,
+        32,
+        43
+      ]
+    ],
+    "file": "Stack-Cliffs.png"
+  },
+  "DESGAGNES": {
+    "bg": "none",
+    "palette": [
+      [
+        0,
+        56,
+        116
+      ],
+      [
+        235,
+        235,
+        235
+      ]
+    ],
+    "file": "Stack-DesgagnesB.png"
+  },
+  "G3": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        235,
+        235,
+        235
+      ]
+    ],
+    "file": "Stack-G3.png"
+  },
+  "GLF": {
+    "bg": "none",
+    "palette": [
+      [
+        204,
+        204,
+        204
+      ],
+      [
+        40,
+        40,
+        40
+      ]
+    ],
+    "file": "Stack-GLF.png"
+  },
+  "HOLCIM": {
+    "bg": "none",
+    "palette": [
+      [
+        235,
+        235,
+        235
+      ],
+      [
+        29,
+        67,
+        112
+      ]
+    ],
+    "file": "Stack-Holcim.png"
+  },
+  "MCASPHALT": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        238,
+        64,
+        53
+      ],
+      [
+        235,
+        235,
+        235
+      ]
+    ],
+    "file": "Stack-McAsphalt.png"
+  },
+  "NACC": {
+    "bg": "none",
+    "palette": [
+      [
+        235,
+        235,
+        235
+      ],
+      [
+        65,
+        164,
+        213
+      ],
+      [
+        92,
+        25,
+        30
+      ]
+    ],
+    "file": "Stack-NACC.png"
+  },
+  "VTB": {
+    "bg": "none",
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        235,
+        235,
+        235
+      ],
+      [
+        182,
+        0,
+        0
+      ]
+    ],
+    "file": "Stack-VTB.png"
+  },
+  "FEDNAV": {
+    "file": "FEDNAV.png",
+    "crop": [
+      325,
+      80,
+      545,
+      375
+    ],
+    "bg": [
+      120,
+      150,
+      190
+    ],
+    "bg_tol": 55,
+    "palette": [
+      [
+        40,
+        40,
+        40
+      ],
+      [
+        228,
+        224,
+        183
+      ],
+      [
+        150,
+        30,
+        30
+      ]
+    ]
+  }
+}

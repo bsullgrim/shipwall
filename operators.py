@@ -30,7 +30,7 @@ NAME_PREFIX_RULES = [
     ("THUNDER",  "CSL"),       # CSL Thunder Bay etc.
     ("ALGO",     "ALGOMA"),    # Algoma Central (Algoma*, Algo*)
     ("ALGOMA",   "ALGOMA"),
-    ("FEDERAL",  "FEDNAV"),    # Fednav salties
+    ("FEDERAL",  "FEDNAV"),    # Fednav salties (e.g. FEDERAL ALSTER)
     ("UMIAK",    "FEDNAV"),    # Fednav Arctic-class
     ("NUNAVIK",  "FEDNAV"),
     ("MISSISSAGI","LOWERLAKES"),# Lower Lakes Towing / Rand
@@ -42,9 +42,16 @@ NAME_PREFIX_RULES = [
     ("STEWART",  "INTERLAKE"), # Interlake Steamship
     ("MESABI",   "INTERLAKE"),
     ("PAUL",     "INTERLAKE"), # Paul R. Tregurtha
-    ("HON ",     "OGLEBAY"),   # Honorable James L. Oberstar (Oglebay/KK)
-    ("MANITOWOC","OGLEBAY"),
 ]
+
+# Fleets whose ship names have NO clean prefix, so name-matching can't identify
+# them reliably. These MUST be mapped by MMSI in mmsi_to_operator.json. Sprites
+# exist for them (ANDRIE, CLIFFS, G3, GLF, HOLCIM, MCASPHALT, NACC, VTB) but a
+# vessel only resolves to them via the MMSI table. Populate that table from
+# observed sightings -- e.g. a season log of vessels seen on the river.
+_MMSI_ONLY_OPERATORS = (
+    "ANDRIE", "CLIFFS", "G3", "GLF", "HOLCIM", "MCASPHALT", "NACC", "VTB",
+)
 
 
 def _load_mmsi_table():
@@ -63,6 +70,13 @@ def _load_mmsi_table():
 _MMSI_TABLE = _load_mmsi_table()
 
 
+# Operators whose family name appears anywhere in the vessel name (not just as
+# a prefix). Matched by substring after the prefix rules miss.
+NAME_CONTAINS_RULES = [
+    ("DESGAGNES", "DESGAGNES"),   # e.g. "ZELADA DESGAGNES", "ROSAIRE A DESGAGNES"
+]
+
+
 def operator_for(mmsi, name):
     """Return an operator key, or 'UNKNOWN'."""
     if mmsi in _MMSI_TABLE:
@@ -71,6 +85,9 @@ def operator_for(mmsi, name):
         upper = name.upper().strip()
         for prefix, key in NAME_PREFIX_RULES:
             if upper.startswith(prefix):
+                return key
+        for needle, key in NAME_CONTAINS_RULES:
+            if needle in upper:
                 return key
     return "UNKNOWN"
 

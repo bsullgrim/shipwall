@@ -165,45 +165,61 @@ function txt(s,x,y,col){
   let cx0=x;
   for(const ch of s){ glyph(ch,cx0,y,col); cx0+=GLYPH_ADV; }
 }
+// Print clipped so nothing crosses maxX (exclusive). GLYPH_ADV px per char.
+function txtClip(s,x,y,maxX,col){
+  const maxChars=Math.floor((maxX-x)/GLYPH_ADV);
+  if(maxChars<1)return;
+  txt(s.length<=maxChars?s:s.slice(0,maxChars),x,y,col);
+}
 function textWidth(s){ return s.length*GLYPH_ADV-1; }
 function centered(s,y,col){ txt(s,Math.floor((W-textWidth(s))/2),y,col); }
 
-function sprite(key,ox,oy){
+// Scalable nearest-neighbour sprite blit; black is transparent.
+function spriteScaled(key,ox,oy,dim){
   const px=SPRITES[key]||SPRITES['UNKNOWN'];if(!px)return;
-  for(let y=0;y<SPRITE_SIZE;y++)for(let x=0;x<SPRITE_SIZE;x++){
-    const c=px[y*SPRITE_SIZE+x];if(c&&c!=='#000000'){cx.fillStyle=c;cx.fillRect(ox+x,oy+y,1,1);}}
+  for(let y=0;y<dim;y++){
+    const sy=(y*SPRITE_SIZE/dim)|0;
+    for(let x=0;x<dim;x++){
+      const sx=(x*SPRITE_SIZE/dim)|0;
+      const c=px[sy*SPRITE_SIZE+sx];
+      if(c&&c!=='#000000'){cx.fillStyle=c;cx.fillRect(ox+x,oy+y,1,1);}
+    }
+  }
 }
 
 function band(v,top,bandH,big){
-  const sprX=1, sprY=top+((bandH-SPRITE_SIZE)>>1);   // funnel on the LEFT edge
-  const tx=SPRITE_SIZE+3;                            // text starts after sprite
-  txt(v.name,tx,top+1,C.name);
-  const dirX=tx+v.name.length*6+2;
-  if(v.dir && dirX<DETAIL_W-5) dirGlyph(v.dir,dirX,top+1);
+  const edge=DETAIL_W-1;                     // text stops before divider
   if(big){
-    txt(v.type+' '+v.sog.toFixed(1)+'kt',tx,top+15,C.value);
-    txt('CRS '+v.cog+'\\u00b0',tx,top+27,C.value);
-    if(v.drft!=null)txt('DRAFT '+v.drft.toFixed(1)+'m',tx,top+39,C.value);
-    if(v.dest)txt('>'+v.dest,tx,top+51,C.dim);
+    // Name across the top, large funnel lower-left, metrics to its right.
+    txtClip(v.name,1,top+1,edge-5,C.name);
+    const dirX=1+Math.min(v.name.length,Math.floor((edge-5-1)/6))*6+2;
+    if(v.dir && dirX<edge-4) dirGlyph(v.dir,dirX,top+1);
+    const fdim=SPRITE_SIZE;                 // 32px
+    const fy=top+bandH-fdim;
+    spriteScaled(v.op,1,fy,fdim);
+    const tx=fdim+4;
+    txt(v.sog.toFixed(1)+'kt',tx,top+14,C.value);
+    txt('CRS'+v.cog,tx,top+26,C.value);
+    if(v.drft!=null)txt('DR'+v.drft.toFixed(1),tx,top+38,C.value);
+    if(v.dest)txtClip('>'+v.dest,tx,top+50,edge,C.dim);
   }else{
-    txt(v.type+' '+v.sog.toFixed(1)+'kt',tx,top+10,C.value);
-    let s='CRS '+v.cog+'\\u00b0';if(v.drft!=null)s+=' '+v.drft.toFixed(1)+'m';
-    txt(s,tx,top+20,C.value);
+    // Split row: ~28px funnel inset left, two compact text rows right.
+    let fdim=bandH-4; if(fdim>SPRITE_SIZE)fdim=SPRITE_SIZE;
+    const fy=top+((bandH-fdim)>>1);
+    spriteScaled(v.op,1,fy,fdim);
+    const tx=fdim+4;
+    txtClip(v.name,tx,top+1,edge-5,C.name);
+    const dirX=tx+Math.min(v.name.length,Math.floor((edge-5-tx)/6))*6+2;
+    if(v.dir && dirX<edge-4) dirGlyph(v.dir,dirX,top+1);
+    // speed + course, no degree sign, clipped
+    txtClip(v.sog.toFixed(1)+'kt '+v.cog,tx,top+12,edge,C.value);
+    if(v.dest)txtClip(v.dest,tx,top+22,edge,C.dim);
   }
-  sprite(v.op,sprX,sprY);
 }
 
 const ROSTER_W=40, DETAIL_W=W-ROSTER_W;
 const C2={down:'#50c8ff',up:'#ff963c'};
 
-function miniSprite(key,ox,oy){
-  const px=SPRITES[key]||SPRITES['UNKNOWN'];if(!px)return;
-  const M=8;
-  for(let y=0;y<M;y++)for(let x=0;x<M;x++){
-    const sx=(x*SPRITE_SIZE/M)|0, sy=(y*SPRITE_SIZE/M)|0;
-    const c=px[sy*SPRITE_SIZE+sx];
-    if(c&&c!=='#000000'){cx.fillStyle=c;cx.fillRect(ox+x,oy+y,1,1);}}
-}
 function dirGlyph(dir,x,y){
   const col=dir==='D'?C2.down:dir==='U'?C2.up:C.dim;
   cx.fillStyle=col;
@@ -220,10 +236,9 @@ function drawRoster(roster){
   if(!roster||!roster.length)return;
   const MAX_R=7, rowH=(H/MAX_R)|0;
   for(let i=0;i<roster.length&&i<MAX_R;i++){
-    const y=i*rowH, x=rx+1;
-    miniSprite(roster[i].op,x,y+((rowH-8)>>1));
-    dirGlyph(roster[i].dir,x+9,y+((rowH-5)>>1));
-    txt(roster[i].name,x+15,y+((rowH-7)>>1),C.value);
+    const y=i*rowH, x=rx+2;
+    dirGlyph(roster[i].dir,x,y+((rowH-5)>>1));
+    txtClip(roster[i].name,x+7,y+((rowH-7)>>1),W,C.value);
   }
 }
 

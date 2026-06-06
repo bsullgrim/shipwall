@@ -311,7 +311,7 @@ def build_frame():
     for v in big[:MAX_ROSTER]:
         name = (v.get("name") or f"{v['mmsi']}")
         roster.append({
-            "name": name[:4],
+            "name": name[:6],
             "op":   operator_for(v["mmsi"], v.get("name")),
             "dir":  bound_dir(v.get("cog"), v.get("sog") or 0.0),
         })

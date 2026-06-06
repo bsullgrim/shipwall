@@ -106,11 +106,14 @@ void drawCenteredIn(const char* text, int zoneW, int y, uint16_t color) {
   dma->print(text);
 }
 
-// Blit a SPRITE_SIZE x SPRITE_SIZE sprite at (ox,oy); black = transparent.
-void drawSprite(const uint16_t* spr, int ox, int oy) {
-  for (int y = 0; y < SPRITE_SIZE; y++) {
-    for (int x = 0; x < SPRITE_SIZE; x++) {
-      uint16_t c = pgm_read_word(&spr[y * SPRITE_SIZE + x]);
+// Blit a sprite scaled to `dim` x `dim` at (ox,oy) by nearest-neighbour
+// sampling; black (0x0000) is transparent. Pass dim == SPRITE_SIZE for 1:1.
+void drawSpriteScaled(const uint16_t* spr, int ox, int oy, int dim) {
+  for (int y = 0; y < dim; y++) {
+    int sy = y * SPRITE_SIZE / dim;
+    for (int x = 0; x < dim; x++) {
+      int sx = x * SPRITE_SIZE / dim;
+      uint16_t c = pgm_read_word(&spr[sy * SPRITE_SIZE + sx]);
       if (c != 0x0000) dma->drawPixel(ox + x, oy + y, c);
     }
   }
@@ -119,26 +122,6 @@ void drawSprite(const uint16_t* spr, int ox, int oy) {
 const uint16_t* spriteFor(const Vessel& v) {
   char opbuf[16];
   v.op.toCharArray(opbuf, sizeof(opbuf));
-  return spriteForKey(opbuf);
-}
-
-// Blit a sprite downscaled into an 8x8 box at (ox,oy) by nearest-neighbour
-// sampling. Lets the roster show a recognisable mini funnel beside each ship.
-void drawMiniSprite(const uint16_t* spr, int ox, int oy) {
-  const int MINI = 8;
-  for (int y = 0; y < MINI; y++) {
-    for (int x = 0; x < MINI; x++) {
-      int sx = x * SPRITE_SIZE / MINI;
-      int sy = y * SPRITE_SIZE / MINI;
-      uint16_t c = pgm_read_word(&spr[sy * SPRITE_SIZE + sx]);
-      if (c != 0x0000) dma->drawPixel(ox + x, oy + y, c);
-    }
-  }
-}
-
-const uint16_t* spriteForOp(const String& op) {
-  char opbuf[16];
-  op.toCharArray(opbuf, sizeof(opbuf));
   return spriteForKey(opbuf);
 }
 
@@ -163,7 +146,8 @@ void drawDirGlyph(char dir, int x, int y) {
   }
 }
 
-// Render the right-side roster: one line per ship, mini funnel + dir + name.
+// Render the right-side roster: one line per ship, dir glyph + name.
+// (No mini funnel -- those pixels go to a longer name.)
 void drawRoster() {
   const int rx = DETAIL_W;                 // roster zone left edge
   // vertical divider
@@ -174,11 +158,10 @@ void drawRoster() {
   dma->setTextSize(1);
   for (int i = 0; i < rosterCount && i < MAX_R; i++) {
     int y = i * rowH;
-    int x = rx + 1;
-    drawMiniSprite(spriteForOp(roster[i].op), x, y + (rowH - 8) / 2);
-    drawDirGlyph(roster[i].dir, x + 9, y + (rowH - 5) / 2);
+    int x = rx + 2;
+    drawDirGlyph(roster[i].dir, x, y + (rowH - 5) / 2);
     dma->setTextColor(C_VALUE);
-    dma->setCursor(x + 15, y + (rowH - 7) / 2);
+    dma->setCursor(x + 7, y + (rowH - 7) / 2);
     dma->print(roster[i].name);
   }
 }
@@ -187,60 +170,65 @@ void drawRoster() {
 // `big` selects the spacious single-vessel layout vs. the compact split row.
 void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
   dma->setTextSize(1);
-  const int sprX = 1;                       // funnel on the LEFT edge
-  const int sprY = top + (bandH - SPRITE_SIZE) / 2;
-  const int tx = SPRITE_SIZE + 3;           // text starts after the sprite
-
-  // Name with a direction glyph trailing it.
-  dma->setTextColor(C_NAME);
-  dma->setCursor(tx, top + 1);
-  dma->print(v.name);
-  // direction glyph just past the name (within detail zone).
-  int dirX = tx + v.name.length() * 6 + 2;
-  if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
 
   if (big) {
-    // Spacious: type+speed, course, draught, destination on separate rows.
-    dma->setCursor(tx, top + 16);
-    dma->setTextColor(C_LABEL); dma->print(v.type);
-    dma->setTextColor(C_VALUE); dma->print(" "); dma->print(v.sog, 1);
+    // Big card: name across the top, then a large funnel lower-left with the
+    // metrics stacked to its right -- the FlightWall "logo is prominent" look.
+    dma->setTextColor(C_NAME);
+    dma->setCursor(1, top + 1);
+    dma->print(v.name);
+    int dirX = 1 + v.name.length() * 6 + 2;
+    if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
+
+    // Funnel: full sprite size, sitting below the name on the left.
+    int fdim = SPRITE_SIZE;                       // 32px
+    int fy = top + bandH - fdim;                  // anchored to the band bottom
+    drawSpriteScaled(spriteFor(v), 1, fy, fdim);
+
+    int tx = fdim + 4;                            // metrics start right of funnel
+    dma->setCursor(tx, top + 14);
+    dma->setTextColor(C_VALUE); dma->print(v.sog, 1);
     dma->setTextColor(C_DIM);   dma->print("kt");
 
-    dma->setCursor(tx, top + 28);
-    dma->setTextColor(C_LABEL); dma->print("CRS ");
+    dma->setCursor(tx, top + 26);
+    dma->setTextColor(C_LABEL); dma->print("CRS");
     dma->setTextColor(C_VALUE); dma->print(v.cog);
-    dma->setTextColor(C_DIM);   dma->print((char)247);
 
     if (v.hasDrft) {
-      dma->setCursor(tx, top + 40);
-      dma->setTextColor(C_LABEL); dma->print("DRAFT ");
+      dma->setCursor(tx, top + 38);
+      dma->setTextColor(C_LABEL); dma->print("DR");
       dma->setTextColor(C_VALUE); dma->print(v.drft, 1);
-      dma->setTextColor(C_DIM);   dma->print("m");
     }
     if (v.dest.length() > 0) {
-      dma->setCursor(tx, top + 52);
+      dma->setCursor(tx, top + 50);
       dma->setTextColor(C_DIM);   dma->print(">");
       dma->setTextColor(C_VALUE); dma->print(v.dest);
     }
   } else {
-    // Compact: two info rows only.
-    dma->setCursor(tx, top + 11);
-    dma->setTextColor(C_LABEL); dma->print(v.type);
-    dma->setTextColor(C_VALUE); dma->print(" "); dma->print(v.sog, 1);
-    dma->setTextColor(C_DIM);   dma->print("kt");
+    // Split row (32px band): funnel inset to ~28px on the left, two compact
+    // text rows to its right.
+    int fdim = bandH - 4;                         // 28px in a 32px band
+    if (fdim > SPRITE_SIZE) fdim = SPRITE_SIZE;
+    int fy = top + (bandH - fdim) / 2;
+    drawSpriteScaled(spriteFor(v), 1, fy, fdim);
 
-    dma->setCursor(tx, top + 21);
-    dma->setTextColor(C_LABEL); dma->print("CRS ");
-    dma->setTextColor(C_VALUE); dma->print(v.cog);
+    int tx = fdim + 4;
+    dma->setTextColor(C_NAME);
+    dma->setCursor(tx, top + 1);
+    dma->print(v.name);
+    int dirX = tx + v.name.length() * 6 + 2;
+    if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
+
+    dma->setCursor(tx, top + 12);
+    dma->setTextColor(C_VALUE); dma->print(v.sog, 1);
+    dma->setTextColor(C_DIM);   dma->print("kt ");
+    dma->setTextColor(C_LABEL); dma->print(v.cog);
     dma->setTextColor(C_DIM);   dma->print((char)247);
-    if (v.hasDrft) {
-      dma->setTextColor(C_DIM); dma->print(" ");
-      dma->setTextColor(C_VALUE); dma->print(v.drft, 1);
-      dma->setTextColor(C_DIM); dma->print("m");
-    }
-  }
 
-  drawSprite(spriteFor(v), sprX, sprY);
+    dma->setCursor(tx, top + 22);
+    dma->setTextColor(C_DIM);
+    if (v.dest.length() > 0) dma->print(v.dest);
+  }
 }
 
 // ---- Screen states ----------------------------------------------------------

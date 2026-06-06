@@ -17,7 +17,7 @@ WORKFLOW
    Without it, the script uses the whole image and auto-detects background.
 
 3. Run:
-       pip install pillow numpy scikit-learn
+       pip install pillow
        python3 photo_to_sprite.py
 
    Outputs:
@@ -39,15 +39,24 @@ CONFIG (funnels/config.json) -- all fields optional, per operator key:
 import json
 import os
 
-import numpy as np
 from PIL import Image
-from sklearn.cluster import KMeans
 
 FUNNEL_DIR = "funnels"
 CONFIG_PATH = os.path.join(FUNNEL_DIR, "config.json")
 DEFAULT_SIZE = 16
 DEFAULT_COLORS = 5
 TRANSPARENT = (0, 0, 0)   # rendered as transparent by firmware + mock
+
+# An LED panel can't show true black against a black background, so in-funnel
+# black is lifted to a visible dark grey. (Background transparency is handled
+# separately via alpha / bg knockout, so the funnel silhouette still reads.)
+DARK_LIFT = (45, 45, 45)        # what in-funnel black becomes
+BLACK_THRESHOLD = 50            # quantized colors at/below this (max channel) are "black"
+
+# Near-white pixels get snapped to clean white, countering the pink/grey tint
+# that downscaling produces when a white band blends into adjacent red/black.
+WHITE_SNAP = (235, 235, 235)
+WHITE_THRESHOLD = 165           # if all channels >= this, snap to clean white
 
 
 def load_config():
@@ -58,69 +67,127 @@ def load_config():
         return {}
 
 
-def auto_bg_color(arr):
-    """Guess the background color from the image corners (usually sky/water)."""
-    h, w, _ = arr.shape
-    k = max(2, min(h, w) // 10)
-    corners = np.concatenate([
-        arr[:k, :k].reshape(-1, 3),
-        arr[:k, -k:].reshape(-1, 3),
-        arr[-k:, :k].reshape(-1, 3),
-        arr[-k:, -k:].reshape(-1, 3),
-    ])
-    # Median is robust to a stray dark pixel in one corner.
-    return np.median(corners, axis=0)
+def auto_bg_color(img):
+    """Guess the background color from the image corners (usually sky/water).
+    img is a small RGB PIL image. Returns an (r,g,b) tuple."""
+    w, h = img.size
+    k = max(2, min(w, h) // 10)
+    px = img.load()
+    samples = []
+    for (x0, y0) in [(0, 0), (w - k, 0), (0, h - k), (w - k, h - k)]:
+        for dx in range(k):
+            for dy in range(k):
+                samples.append(px[x0 + dx, y0 + dy])
+    # Median per channel, robust to a stray dark pixel in a corner.
+    samples.sort(key=lambda c: c[0] + c[1] + c[2])
+    return samples[len(samples) // 2]
 
 
-def quantize(arr, n_colors):
-    """Reduce to n_colors flat colors via k-means; return (labels, palette)."""
-    flat = arr.reshape(-1, 3).astype(float)
-    n = min(n_colors, len(np.unique(flat, axis=0)))
-    if n < 1:
-        n = 1
-    km = KMeans(n_clusters=n, n_init=4, random_state=0).fit(flat)
-    palette = km.cluster_centers_.astype(int)
-    labels = km.labels_.reshape(arr.shape[:2])
-    return labels, palette
+def quantize(img, n_colors):
+    """Reduce a small RGB PIL image to n_colors flat colors using Pillow's
+    median-cut quantizer. Returns an RGB image with at most n_colors colors."""
+    q = img.quantize(colors=max(1, n_colors), method=Image.MEDIANCUT)
+    return q.convert("RGB")
+
+
+def _dist(a, b):
+    return ((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2) ** 0.5
 
 
 def make_sprite(path, cfg):
     size = cfg.get("size", DEFAULT_SIZE)
     n_colors = cfg.get("colors", DEFAULT_COLORS)
 
-    img = Image.open(path).convert("RGB")
+    img = Image.open(path)
+    # Preserve alpha so transparent-background PNG stacks knock out cleanly.
+    has_alpha = img.mode in ("RGBA", "LA") or (
+        img.mode == "P" and "transparency" in img.info)
+    alpha = None
+    if has_alpha:
+        rgba = img.convert("RGBA")
+        alpha = rgba.split()[3]
+        img = rgba.convert("RGB")
+    else:
+        img = img.convert("RGB")
+
     if "crop" in cfg:
-        img = img.crop(tuple(cfg["crop"]))
+        box = tuple(cfg["crop"])
+        img = img.crop(box)
+        if alpha is not None:
+            alpha = alpha.crop(box)
 
     # Downsample with area averaging (LANCZOS) so bands blend cleanly, not alias.
     small = img.resize((size, size), Image.LANCZOS)
-    arr = np.array(small)
+    small_alpha = alpha.resize((size, size), Image.LANCZOS) if alpha else None
 
-    # Determine the background color to knock out (-> transparent).
+    # Background color to knock out (-> transparent).
     bg_mode = cfg.get("bg", "auto")
     bg_tol = cfg.get("bg_tol", 40)
     bg_rgb = None
     if bg_mode == "auto":
-        bg_rgb = auto_bg_color(np.array(img.resize((64, 64), Image.LANCZOS)))
+        bg_rgb = auto_bg_color(img.resize((64, 64), Image.LANCZOS))
     elif isinstance(bg_mode, (list, tuple)):
-        bg_rgb = np.array(bg_mode, dtype=float)
+        bg_rgb = tuple(bg_mode)
     # bg_mode == "none" leaves bg_rgb None (keep everything opaque)
 
-    labels, palette = quantize(arr, n_colors)
+    quant = quantize(small, n_colors)
+    qpx = quant.load()
+    apx = small_alpha.load() if small_alpha else None
 
-    # Build the final RGB sprite, mapping background-ish pixels to transparent.
-    out = np.zeros((size, size, 3), dtype=int)
+    # Per-operator overrides for the cleanup constants.
+    dark_lift = tuple(cfg.get("dark_lift", DARK_LIFT))
+    white_snap = bool(cfg.get("white_snap", True))
+
+    # Fixed-palette mode: if the operator specifies its real livery colors,
+    # snap every pixel to the nearest one. This eliminates the muddy greys that
+    # median-cut + downscale produce on funnels with crests/fine detail -- every
+    # pixel becomes an unambiguous livery color. The default (no palette) keeps
+    # the quantizer + black-lift/white-snap heuristics.
+    palette = cfg.get("palette")            # e.g. [[40,40,40],[200,30,30],[235,235,235]]
+    if palette:
+        palette = [tuple(c) for c in palette]
+        spx = small.load()                  # use the downsampled image directly
+        out = Image.new("RGB", (size, size), TRANSPARENT)
+        opx = out.load()
+        for y in range(size):
+            for x in range(size):
+                if apx is not None and apx[x, y] < 128:
+                    opx[x, y] = TRANSPARENT
+                    continue
+                color = spx[x, y]
+                if bg_rgb is not None and _dist(color, bg_rgb) < bg_tol:
+                    opx[x, y] = TRANSPARENT
+                    continue
+                nearest = min(palette, key=lambda p: _dist(color, p))
+                # A palette black still needs lifting so it shows on the panel.
+                if max(nearest) <= BLACK_THRESHOLD:
+                    nearest = dark_lift
+                opx[x, y] = nearest
+        return out, size
+
+    out = Image.new("RGB", (size, size), TRANSPARENT)
+    opx = out.load()
     for y in range(size):
         for x in range(size):
-            color = palette[labels[y, x]]
-            if bg_rgb is not None and np.linalg.norm(color - bg_rgb) < bg_tol:
-                out[y, x] = TRANSPARENT
+            # Alpha-transparent pixels (from PNG) become panel-transparent.
+            if apx is not None and apx[x, y] < 128:
+                opx[x, y] = TRANSPARENT
+                continue
+            color = qpx[x, y]
+            # Background-colored pixels become transparent.
+            if bg_rgb is not None and _dist(color, bg_rgb) < bg_tol:
+                opx[x, y] = TRANSPARENT
+                continue
+            r, g, b = color
+            # In-funnel black would be invisible on a black panel -> lift to
+            # a visible dark grey so the funnel's black bands/cap read.
+            if max(r, g, b) <= BLACK_THRESHOLD:
+                opx[x, y] = dark_lift
+            # Near-white -> clean white, undoing the pink/grey downscale tint.
+            elif white_snap and min(r, g, b) >= WHITE_THRESHOLD:
+                opx[x, y] = WHITE_SNAP
             else:
-                # Never let a real funnel pixel be pure black (that's transparent);
-                # nudge near-black up by one level so it still shows.
-                if tuple(color) == TRANSPARENT:
-                    color = np.array([8, 8, 8])
-                out[y, x] = color
+                opx[x, y] = color
     return out, size
 
 
@@ -138,12 +205,20 @@ def export_preview(sprites, scale=14):
     canvas = Image.new("RGB", (cols * (size * scale + pad) + pad,
                                size * scale + 2 * pad + 16), (30, 30, 30))
     for i, k in enumerate(keys):
-        arr = sprites[k][0]
-        im = Image.fromarray(arr.astype("uint8"), "RGB").resize(
-            (size * scale, size * scale), Image.NEAREST)
+        im = sprites[k][0].resize((size * scale, size * scale), Image.NEAREST)
         canvas.paste(im, (pad + i * (size * scale + pad), pad))
     canvas.save("sprites_preview.png")
     print("wrote sprites_preview.png")
+
+
+def _make_unknown(size):
+    """A plain grey funnel as the fallback sprite."""
+    img = Image.new("RGB", (size, size), (0, 0, 0))
+    px = img.load()
+    for y in range(2, size - 2):
+        for x in range(size // 4, size * 3 // 4):
+            px[x, y] = (110, 110, 110)
+    return img
 
 
 def export_header(sprites):
@@ -162,14 +237,12 @@ def export_header(sprites):
     keys = list(sprites.keys())
     # Guarantee an UNKNOWN fallback exists.
     if "UNKNOWN" not in keys:
-        grey = np.full((size, size, 3), 0, dtype=int)
-        grey[2:size-2, size//4:size*3//4] = [110, 110, 110]
-        sprites["UNKNOWN"] = (grey, size)
+        sprites["UNKNOWN"] = (_make_unknown(size), size)
         keys.append("UNKNOWN")
 
     for k in keys:
-        arr = sprites[k][0]
-        vals = [f"0x{rgb565(*arr[y, x]):04X}"
+        px = sprites[k][0].load()
+        vals = [f"0x{rgb565(*px[x, y]):04X}"
                 for y in range(size) for x in range(size)]
         lines.append(
             f"const uint16_t SPR_{k}[{size*size}] PROGMEM = {{ {', '.join(vals)} }};")
@@ -199,16 +272,26 @@ def main():
 
     sprites = {}
     exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+    # Build a filename -> config lookup. A config entry may set "file" to bind
+    # itself to a specific source filename, so descriptive names like
+    # "Stack-ASC.png" can map to the operator key "ASC" without renaming.
+    by_file = {c["file"]: (k, c) for k, c in cfg_all.items()
+               if isinstance(c, dict) and "file" in c}
+
     for fname in sorted(os.listdir(FUNNEL_DIR)):
         if not fname.lower().endswith(exts):
             continue
-        key = os.path.splitext(fname)[0].upper()
-        cfg = cfg_all.get(key, {})
+        if fname in by_file:
+            key, cfg = by_file[fname]
+        else:
+            key = os.path.splitext(fname)[0].upper()
+            cfg = cfg_all.get(key, {})
         try:
             arr, size = make_sprite(os.path.join(FUNNEL_DIR, fname), cfg)
             sprites[key] = (arr, size)
             print(f"  {key}: {fname} -> {size}x{size}"
-                  + (" (cropped)" if "crop" in cfg else ""))
+                  + (" (cropped)" if "crop" in cfg else "")
+                  + (" (palette)" if "palette" in cfg else ""))
         except Exception as e:
             print(f"  {key}: FAILED ({e})")
 
