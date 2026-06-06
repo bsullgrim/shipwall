@@ -1,0 +1,4 @@
+{
+  "_comment": "MMSI -> operator key. Grows over time. Keys MUST match firmware sprite keys (CSL, ALGOMA, FEDNAV, LOWERLAKES, ASC, INTERLAKE, OGLEBAY). Name-prefix matching in operators.py handles most vessels automatically, so this file is only needed for ships whose names don't fit a prefix rule, or to override one. Replace the example below with real MMSIs you observe via unknown_vessels.json.",
+  "316001234": "CSL"
+}
