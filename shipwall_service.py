@@ -15,27 +15,113 @@ import asyncio
 import json
 import math
 import os
+import sys
 import time
 
 import aiohttp
 import websockets
 
+# On Windows, asyncio defaults to the Proactor event loop, which aiodns
+# (pulled in by aiohttp for DNS) cannot use. Switch to the Selector loop.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from operators import operator_for, log_unknown
 from schedule import target_brightness, seaway_closed
 
+
+def _load_dotenv(path=".env"):
+    """Minimal .env loader (no dependency). Lines like KEY=value; '#' comments.
+    Existing environment variables always take precedence over the file."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key, val = key.strip(), val.strip().strip('"').strip("'")
+            os.environ.setdefault(key, val)
+
+
+_load_dotenv()
+
 # --- Configuration -----------------------------------------------------------
 
-API_KEY   = os.environ["AISSTREAM_KEY"]          # get a free key at aisstream.io
+try:
+    API_KEY = os.environ["AISSTREAM_KEY"]
+except KeyError:
+    raise SystemExit(
+        "AISSTREAM_KEY is not set.\n"
+        "  Copy .env.example to .env and add your key, or export it:\n"
+        "    export AISSTREAM_KEY=your_key_here\n"
+        "  Get a free key at https://aisstream.io"
+    )
 ESP32_URL = f"http://{os.environ.get('ESP32_HOST', '192.168.1.50')}/frame"
 
-# Chippewa Bay -> Oak Point, upper St. Lawrence Seaway (American Narrows).
+# Set SHIPWALL_DEBUG=1 to log, every push, why each tracked vessel is or isn't
+# placed in a zone. Invaluable when the panel looks empty but ships are tracked.
+DEBUG = os.environ.get("SHIPWALL_DEBUG", "") not in ("", "0", "false", "False")
+
+# Set SHIPWALL_LOG=path.csv to record every vessel AISStream delivers, to a CSV.
+# Logs each vessel the first time it's seen and whenever its name/type/zone
+# changes -- not every push -- so you can leave it running for hours and review
+# what your feed actually covers. Empty = disabled.
+VESSEL_LOG = os.environ.get("SHIPWALL_LOG", "").strip()
+
+# Two zones:
+#   OUTER box -- Cape Vincent (where the river leaves Lake Ontario) downbound
+#     to the Eisenhower Lock near Massena, NY (~45.00, -74.80). Feeds the
+#     right-side roster: every big ship in this stretch of the upper Seaway.
+#   INNER box -- Chippewa Bay -> Oak Point (American Narrows). Feeds the
+#     detailed left-side cards, exactly as before.
 # AISStream bounding box format: [[[lat_sw, lon_sw], [lat_ne, lon_ne]]]
-BOUNDING_BOX = [[[44.42, -75.82], [44.58, -75.55]]]
+#   SW corner: Cape Vincent area (44.10, -76.40)
+#   NE corner: just past the Eisenhower Lock (45.02, -74.78)
+OUTER_BOX = [[[44.10, -76.40], [45.02, -74.78]]]
+INNER_BOX = (44.42, -75.82, 44.58, -75.55)   # (min_lat, min_lon, max_lat, max_lon)
+BOUNDING_BOX = OUTER_BOX                       # what we subscribe to
 
 PUSH_INTERVAL   = 10      # seconds between frames sent to the display
 VESSEL_TIMEOUT  = 600     # drop vessels not heard from in 10 minutes
-MAX_VESSELS     = 5       # display shows up to 5 at once (FlightWall parity)
+MAX_VESSELS     = 4       # detailed cards on the left (inner box)
+MAX_ROSTER      = 7       # rows in the right-side roster (outer box)
 MIN_SPEED_KTS   = 0.3     # below this, treat as moored/anchored
+
+# River axis through the Narrows runs ~SW<->NE. Downbound = toward the sea
+# (NE-ish course), upbound = toward the lakes (SW-ish course).
+# Downbound if COG falls in [315..360]U[0..135]; else upbound. Moored handled
+# separately by speed.
+def bound_dir(cog, sog):
+    if sog < MIN_SPEED_KTS:
+        return "M"          # moored / anchored
+    if cog is None:
+        return "?"
+    c = cog % 360
+    return "D" if (c >= 315 or c < 135) else "U"
+
+# Big commercial traffic only -- drop pleasure/sailing/fishing/etc. from roster.
+# AIS type codes: 70-79 cargo, 80-89 tanker, 52 tug, 60-69 passenger, 50 pilot.
+def is_big_ship(type_code):
+    if type_code is None:
+        return False
+    return (70 <= type_code <= 89) or type_code in (50, 52) or (60 <= type_code <= 69)
+
+
+# Roster eligibility is more permissive: keep a vessel UNLESS we positively know
+# it's small. A freshly-seen ship has no type code yet (static data lags its
+# position by up to ~6 min); excluding it would leave the roster blank for
+# minutes. Known-small types (30 fishing, 36-37 sailing/pleasure) are dropped.
+SMALL_TYPES = set(range(30, 32)) | set(range(36, 38))  # fishing, sailing, pleasure
+def _roster_eligible(type_code):
+    if type_code is None:
+        return True                 # unknown yet -> show provisionally
+    if type_code in SMALL_TYPES:
+        return False
+    # Other known small/irrelevant (e.g. 0 = not available) still allowed in;
+    # most upper-Seaway AIS traffic that isn't pleasure craft is worth showing.
+    return True
 
 WS_URL = "wss://stream.aisstream.io/v0/stream"
 
@@ -82,6 +168,7 @@ def update_static(mmsi, msg):
     if name:
         v["name"] = name
     v["type"] = ship_type_label(msg.get("Type"))
+    v["type_code"] = msg.get("Type")
     dest = (msg.get("Destination") or "").strip()
     if dest:
         v["dest"] = dest
@@ -96,42 +183,148 @@ def prune():
         del vessels[m]
 
 
+# --- Long-run vessel logging (SHIPWALL_LOG=path.csv) --------------------------
+import csv
+import datetime
+
+# Tracks the last-logged signature per MMSI so we only write on change.
+_logged = {}
+_log_header_written = False
+
+
+def log_vessel(v):
+    """Append a CSV row when a vessel is first seen or its key details change."""
+    if not VESSEL_LOG:
+        return
+    global _log_header_written
+    mmsi = v["mmsi"]
+    name = v.get("name") or ""
+    tc = v.get("type_code")
+    # Signature of the fields we care about changing.
+    sig = (name, tc)
+    if _logged.get(mmsi) == sig:
+        return                      # nothing new worth logging
+    first_seen = mmsi not in _logged
+    _logged[mmsi] = sig
+
+    row = {
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "event": "first_seen" if first_seen else "updated",
+        "mmsi": mmsi,
+        "name": name,
+        "type_code": tc if tc is not None else "",
+        "type": v.get("type", ""),
+        "lat": round(v.get("lat", 0.0), 4),
+        "lon": round(v.get("lon", 0.0), 4),
+        "sog": v.get("sog", ""),
+        "cog": v.get("cog", ""),
+        "dest": v.get("dest", ""),
+        "in_inner": _in_inner_box(v) if v.get("lat") is not None else "",
+        "roster_ok": _roster_eligible(tc),
+    }
+    try:
+        write_header = not _log_header_written and not os.path.exists(VESSEL_LOG)
+        with open(VESSEL_LOG, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+        _log_header_written = True
+    except Exception as e:
+        print(f"[log] could not write {VESSEL_LOG}: {e}")
+
+
+def _in_inner_box(v):
+    mn_lat, mn_lon, mx_lat, mx_lon = INNER_BOX
+    return (mn_lat <= v["lat"] <= mx_lat) and (mn_lon <= v["lon"] <= mx_lon)
+
+
+def _debug_frame(positioned, frame, roster):
+    """Explain, per tracked-and-positioned vessel, where it landed and why."""
+    print(f"--- frame: {len(positioned)} positioned | "
+          f"{len(frame)} detail | {len(roster)} roster ---")
+    for v in positioned:
+        tc = v.get("type_code")
+        zones = []
+        if _in_inner_box(v):
+            zones.append("INNER")
+        if _roster_eligible(tc):
+            zones.append("ROSTER")
+        why = ""
+        if not zones:
+            if not _roster_eligible(tc):
+                why = f"(type {tc} = small, excluded)"
+            else:
+                why = "(outside inner box, not roster-eligible)"
+        print(f"  {v.get('name') or v['mmsi']:<20} "
+              f"lat={v['lat']:.3f} lon={v['lon']:.3f} "
+              f"type={tc} sog={v.get('sog')} -> {','.join(zones) or 'NONE '+why}")
+
+
 def build_frame():
-    """Pick the vessels to show and shape them for the display."""
+    """Build both display zones from the tracked vessels.
+
+    - 'vessels': detailed cards for ships inside the INNER box (Chippewa->Oak).
+    - 'roster':  one-line entries for every big ship in the OUTER box.
+    """
     prune()
     now = time.time()
-    candidates = []
-    for v in vessels.values():
-        if v.get("lat") is None or v.get("lon") is None:
-            continue
-        sog = v.get("sog") or 0.0
-        # Prefer moving vessels; moored ships are boring on a wall.
-        moving = sog >= MIN_SPEED_KTS
-        candidates.append((moving, sog, v))
 
-    # Moving vessels first, then by speed descending.
-    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+    positioned = [v for v in vessels.values()
+                  if v.get("lat") is not None and v.get("lon") is not None]
 
+    # Long-run CSV log: record every vessel the feed delivers (dedupes itself).
+    for v in positioned:
+        log_vessel(v)
+
+    # --- Inner-box detailed cards (left side) ---
+    inner = [v for v in positioned if _in_inner_box(v)]
+    inner.sort(key=lambda v: ((v.get("sog") or 0) >= MIN_SPEED_KTS,
+                              v.get("sog") or 0), reverse=True)
     frame = []
-    for _, _, v in candidates[:MAX_VESSELS]:
+    for v in inner[:MAX_VESSELS]:
         name = (v.get("name") or f"MMSI {v['mmsi']}")
         op = operator_for(v["mmsi"], v.get("name"))
         if op == "UNKNOWN" and v.get("name"):
             log_unknown(v["mmsi"], v.get("name"))
         frame.append({
-            "name": name[:20],
+            "name": name[:18],
             "op":   op,
             "type": v.get("type", "VSL"),
             "dest": (v.get("dest") or "")[:16],
             "sog":  round(v.get("sog") or 0.0, 1),
             "cog":  round(v.get("cog") or 0.0),
             "drft": v.get("draught"),
+            "dir":  bound_dir(v.get("cog"), v.get("sog") or 0.0),
         })
+
+    # --- Outer-box roster (right side): big commercial ships ---
+    # Include vessels whose static data (and thus type) hasn't arrived yet:
+    # a fresh position report precedes static data by up to ~6 min, and we'd
+    # rather show an unknown big ship than a blank roster. Only EXCLUDE types
+    # we positively know are small (pleasure/sailing/fishing).
+    big = [v for v in positioned if _roster_eligible(v.get("type_code"))]
+    # Order: moving first (by speed), moored last, so active traffic is on top.
+    big.sort(key=lambda v: ((v.get("sog") or 0) >= MIN_SPEED_KTS,
+                            v.get("sog") or 0), reverse=True)
+    roster = []
+    for v in big[:MAX_ROSTER]:
+        name = (v.get("name") or f"{v['mmsi']}")
+        roster.append({
+            "name": name[:4],
+            "op":   operator_for(v["mmsi"], v.get("name")),
+            "dir":  bound_dir(v.get("cog"), v.get("sog") or 0.0),
+        })
+
+    if DEBUG:
+        _debug_frame(positioned, frame, roster)
+
     return {
         "ts": int(now),
         "bright": target_brightness(),     # 0-255, sun-based
         "closed": seaway_closed(),         # winter closure flag
-        "vessels": frame,
+        "vessels": frame,                  # inner-box detail cards
+        "roster": roster,                  # outer-box one-liners
     }
 
 
@@ -145,7 +338,8 @@ async def pusher(session):
         try:
             async with session.post(ESP32_URL, json=frame, timeout=5) as resp:
                 await resp.read()
-            print(f"[push] {len(frame['vessels'])} vessels -> ESP32 "
+            print(f"[push] {len(frame['vessels'])} detail / "
+                  f"{len(frame['roster'])} roster -> ESP32 "
                   f"(tracking {len(vessels)} total)")
         except Exception as e:
             print(f"[push] failed: {e}")

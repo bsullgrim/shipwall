@@ -181,14 +181,59 @@ python3 simulate.py          # terminal 2
 When the hardware arrives, nothing about the Pi side changes — you just point
 `ESP32_HOST` at the panel's real IP instead of `localhost:8080`.
 
+### Logging what the feed actually delivers
+
+To characterize coverage over hours without watching the panel, set
+`SHIPWALL_LOG` to a CSV path. The service logs every vessel AISStream delivers
+— once when first seen, and again only when its name/type resolves — so the
+file stays compact even over a long run:
+
+```bash
+SHIPWALL_LOG=ships.csv AISSTREAM_KEY=... python3 shipwall_service.py
+```
+```powershell
+$env:SHIPWALL_LOG="ships.csv"; python shipwall_service.py
+```
+
+Columns: timestamp, event (first_seen/updated), mmsi, name, type_code, type,
+lat, lon, sog, cog, dest, `in_inner` (was it in the American Narrows box), and
+`roster_ok` (would it qualify for the roster). Open it in a spreadsheet
+afterward to count distinct vessels, see how many were big commercial ships,
+and judge whether your feed's coverage of the reach is good enough. Appends
+across restarts; delete the file to start fresh.
+
+### Screenshots of ships in the detail view
+
+The mock panel automatically saves a screenshot whenever a new ship appears in
+the left detail zone, to a `captures/` folder. One PNG per ship per visit
+(named `<timestamp>_<SHIP_NAME>.png`, upscaled 6× for viewability), so you can
+leave the browser open for hours and review which vessels actually reached the
+American Narrows without watching live. Requires the browser tab to stay open
+(the capture happens in-page); `captures/` is gitignored.
+
 ---
 
 
 
-**Adaptive layout.** One vessel on the river → a single large card (big text,
-full funnel, type/speed/course/draught/destination). Two or more → a
-two-vessel split (top and bottom halves), cycling pairs every 6 s if more than
-two are present. The panel switches automatically as traffic changes.
+**Two zones.** The panel splits into a detailed view on the left (~88px) and a
+seaway roster on the right (~40px).
+
+*Left — American Narrows detail.* The Chippewa Bay → Oak Point reach: one big
+card for a single vessel, or a two-vessel split, with funnel, name, a
+down/upbound glyph, speed, course, draught, destination. Adaptive: one vessel →
+big card; two or more → top/bottom split, cycling pairs every 6 s when more
+than two are present. Empty → "AMERICAN NARROWS clear" (the roster may still be
+busy).
+
+*Right — upper Seaway roster.* Every big commercial ship (cargo, tanker, tug,
+passenger; pleasure craft and fishing filtered out) between Cape Vincent and
+Oak Point, one line each: a mini funnel sprite, a direction glyph, and a
+4-character name. Moving ships sort to the top; up to 7 rows.
+
+**Down / upbound.** Derived from course over ground, since the river's axis
+through the Narrows runs SW↔NE. *Downbound* (seaward, NE-ish) shows a cyan ▼;
+*upbound* (toward Lake Ontario and the upper lakes, SW-ish) an orange ▲;
+moored/anchored a grey ■.
 
 **Brightness (sun-based, no extra hardware).** `schedule.py` computes sunrise
 and sunset for the river reach and ramps brightness over a 30-minute window at
@@ -214,7 +259,36 @@ ends auto-start on boot.
 
 ---
 
-## Run the Pi service on boot (systemd)
+## Keeping your API key out of git
+
+The AISStream key never lives in committed code. The service reads it from the
+environment (or a local, gitignored `.env` file). To set up:
+
+```bash
+cp .env.example .env        # .env is gitignored
+# edit .env, add your real key
+python3 shipwall_service.py # the service auto-loads .env
+```
+
+`.gitignore` already excludes `.env`, `*.key`, and `secrets.json`, so the key
+can't be committed by accident. The repo ships only `.env.example` (a template
+with no real value). A real environment variable always overrides the file, so
+the systemd unit (which sets `Environment=AISSTREAM_KEY=...`) works without a
+`.env` present.
+
+If a key ever does land in a commit: treat it as compromised, **rotate it** at
+aisstream.io (revoke + reissue), and update your local `.env`. Scrubbing git
+history is possible (`git filter-repo`) but rotating is faster and safer, since
+the old key may already be cached by GitHub, forks, or scrapers. AISStream keys
+are free and unprivileged, so the blast radius is small — but rotate anyway.
+
+For the systemd unit, keep the key in the unit file (root-readable only) or in
+a separate `EnvironmentFile=` that you also gitignore; don't paste it into any
+file inside the repo.
+
+---
+
+
 
 `/etc/systemd/system/shipwall.service`:
 ```ini

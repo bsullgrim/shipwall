@@ -1,0 +1,5 @@
+timestamp,event,mmsi,name,type_code,type,lat,lon,sog,cog,dest,in_inner,roster_ok
+2026-06-06T13:14:00,first_seen,316048072,,,,44.3252,-76.1338,11.1,270.3,,False,True
+2026-06-06T13:14:00,first_seen,316048073,,,,44.3073,-76.1879,11.4,216,,False,True
+2026-06-06T13:14:20,updated,316048072,THOUSAND ISLANDER 3,60,PAX,44.3252,-76.1338,11.1,270.3,,False,True
+2026-06-06T13:14:20,first_seen,316041032,,,,44.125,-76.3592,10.8,231,,False,True

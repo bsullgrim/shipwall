@@ -57,17 +57,32 @@ struct Vessel {
   int    cog;
   float  drft;
   bool   hasDrft;
+  char   dir;         // 'D' down, 'U' up, 'M' moored, '?' unknown
 };
 const int MAX_V = 5;
 Vessel vessels[MAX_V];
 int   vesselCount = 0;
+
+struct RosterEntry {
+  String name;        // <=8 chars
+  String op;
+  char   dir;
+};
+const int MAX_R = 7;
+RosterEntry roster[MAX_R];
+int   rosterCount = 0;
+
+// Zone split of the 128px width: detail on the left, roster on the right.
+const int ROSTER_W = 40;             // right-side roster width
+int  DETAIL_W;                       // = W - ROSTER_W, set in setup
+
 int   pairIndex   = 0;        // which vessel (or pair) is showing
 uint32_t lastSwap = 0;
 uint32_t lastFrameMs = 0;     // when we last heard from the Pi
 bool  seawayClosed = false;
 uint8_t targetBright = 128;
 
-uint16_t C_NAME, C_LABEL, C_VALUE, C_DIM, C_ACCENT;
+uint16_t C_NAME, C_LABEL, C_VALUE, C_DIM, C_ACCENT, C_UP, C_DOWN;
 
 int W, H;   // logical width/height, filled in setup
 
@@ -78,6 +93,16 @@ void drawCentered(const char* text, int y, uint16_t color) {
   dma->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
   dma->setTextColor(color);
   dma->setCursor((W - w) / 2, y);
+  dma->print(text);
+}
+
+// Center text within the left `zoneW` pixels (used for the detail zone).
+void drawCenteredIn(const char* text, int zoneW, int y, uint16_t color) {
+  int16_t x1, y1; uint16_t w, h;
+  dma->setTextSize(1);
+  dma->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  dma->setTextColor(color);
+  dma->setCursor((zoneW - w) / 2, y);
   dma->print(text);
 }
 
@@ -97,6 +122,67 @@ const uint16_t* spriteFor(const Vessel& v) {
   return spriteForKey(opbuf);
 }
 
+// Blit a sprite downscaled into an 8x8 box at (ox,oy) by nearest-neighbour
+// sampling. Lets the roster show a recognisable mini funnel beside each ship.
+void drawMiniSprite(const uint16_t* spr, int ox, int oy) {
+  const int MINI = 8;
+  for (int y = 0; y < MINI; y++) {
+    for (int x = 0; x < MINI; x++) {
+      int sx = x * SPRITE_SIZE / MINI;
+      int sy = y * SPRITE_SIZE / MINI;
+      uint16_t c = pgm_read_word(&spr[sy * SPRITE_SIZE + sx]);
+      if (c != 0x0000) dma->drawPixel(ox + x, oy + y, c);
+    }
+  }
+}
+
+const uint16_t* spriteForOp(const String& op) {
+  char opbuf[16];
+  op.toCharArray(opbuf, sizeof(opbuf));
+  return spriteForKey(opbuf);
+}
+
+// Draw a small direction indicator at (x,y) in a 5x5 cell:
+//   'D' downbound -> filled down-triangle (toward the sea)
+//   'U' upbound   -> filled up-triangle  (toward the lakes)
+//   'M' moored    -> small square
+//   else          -> dot
+void drawDirGlyph(char dir, int x, int y) {
+  uint16_t col = (dir == 'D') ? C_DOWN : (dir == 'U') ? C_UP : C_DIM;
+  if (dir == 'D') {
+    for (int r = 0; r < 4; r++)
+      for (int c = r; c < 4 - r + 1; c++) dma->drawPixel(x + c, y + r, col);
+  } else if (dir == 'U') {
+    for (int r = 0; r < 4; r++)
+      for (int c = (3 - r); c <= r + 1; c++) dma->drawPixel(x + c, y + 3 - r, col);
+  } else if (dir == 'M') {
+    for (int r = 1; r < 4; r++)
+      for (int c = 1; c < 4; c++) dma->drawPixel(x + c, y + r, col);
+  } else {
+    dma->drawPixel(x + 2, y + 2, col);
+  }
+}
+
+// Render the right-side roster: one line per ship, mini funnel + dir + name.
+void drawRoster() {
+  const int rx = DETAIL_W;                 // roster zone left edge
+  // vertical divider
+  for (int y = 0; y < H; y += 2) dma->drawPixel(rx, y, C_DIM);
+
+  if (rosterCount == 0) return;
+  const int rowH = H / MAX_R;              // 64/7 = 9px rows
+  dma->setTextSize(1);
+  for (int i = 0; i < rosterCount && i < MAX_R; i++) {
+    int y = i * rowH;
+    int x = rx + 1;
+    drawMiniSprite(spriteForOp(roster[i].op), x, y + (rowH - 8) / 2);
+    drawDirGlyph(roster[i].dir, x + 9, y + (rowH - 5) / 2);
+    dma->setTextColor(C_VALUE);
+    dma->setCursor(x + 15, y + (rowH - 7) / 2);
+    dma->print(roster[i].name);
+  }
+}
+
 // Draw one vessel within a band whose top is `top` and height is `bandH`.
 // `big` selects the spacious single-vessel layout vs. the compact split row.
 void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
@@ -105,10 +191,13 @@ void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
   const int sprY = top + (bandH - SPRITE_SIZE) / 2;
   const int tx = SPRITE_SIZE + 3;           // text starts after the sprite
 
-  // Name.
+  // Name with a direction glyph trailing it.
   dma->setTextColor(C_NAME);
   dma->setCursor(tx, top + 1);
   dma->print(v.name);
+  // direction glyph just past the name (within detail zone).
+  int dirX = tx + v.name.length() * 6 + 2;
+  if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
 
   if (big) {
     // Spacious: type+speed, course, draught, destination on separate rows.
@@ -178,42 +267,44 @@ void screenClosed() {
 void render() {
   uint32_t now = millis();
 
-  // 1) Lost contact with the Pi?
+  // 1) Lost contact with the Pi? (full-screen, no roster)
   if (lastFrameMs != 0 && now - lastFrameMs > DATA_TIMEOUT_MS) {
     screenStatus("WAITING", "for data");
     return;
   }
-  // 2) Winter closure.
-  if (seawayClosed && vesselCount == 0) {
+  // 2) Winter closure with nothing anywhere. (full-screen)
+  if (seawayClosed && vesselCount == 0 && rosterCount == 0) {
     screenClosed();
     return;
   }
-  // 3) Open season, but nothing on the water right now.
-  if (vesselCount == 0) {
-    screenStatus("ST LAWRENCE", "no vessels");
-    return;
-  }
 
-  // 4) Adaptive vessel display.
   dma->fillScreen(0);
-  if (vesselCount == 1) {
-    drawVesselBand(vessels[0], 0, H, true);          // one big card
+
+  // --- Left: detail zone for inner-box vessels ---
+  if (vesselCount == 0) {
+    // Nothing in the close-up reach, but the river may still be busy upstream.
+    drawCenteredIn("AMERICAN", DETAIL_W, H / 2 - 12, C_ACCENT);
+    drawCenteredIn("NARROWS", DETAIL_W, H / 2 - 2, C_DIM);
+    drawCenteredIn("clear", DETAIL_W, H / 2 + 10, C_DIM);
+  } else if (vesselCount == 1) {
+    drawVesselBand(vessels[0], 0, H, true);
   } else {
-    // Two-vessel split; cycle pairs if more than 2 present.
     int first = pairIndex;
     int second = (pairIndex + 1) % vesselCount;
     drawVesselBand(vessels[first], 0, H / 2, false);
-    // hairline divider
-    for (int x = 0; x < W; x += 2) dma->drawPixel(x, H / 2, C_DIM);
+    for (int x = 0; x < DETAIL_W; x += 2) dma->drawPixel(x, H / 2, C_DIM);
     drawVesselBand(vessels[second], H / 2 + 1, H / 2 - 1, false);
   }
+
+  // --- Right: roster of all big ships in the outer box ---
+  drawRoster();
 }
 
 // ---- HTTP handler -----------------------------------------------------------
 void handleFrame() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "POST only"); return; }
   String body = server.arg("plain");
-  StaticJsonDocument<3072> doc;
+  StaticJsonDocument<4096> doc;
   if (deserializeJson(doc, body)) { server.send(400, "text/plain", "bad json"); return; }
 
   targetBright = (uint8_t)(int)(doc["bright"] | 128);
@@ -233,7 +324,22 @@ void handleFrame() {
     v.cog  = o["cog"] | 0;
     if (o["drft"].isNull()) { v.hasDrft = false; v.drft = 0; }
     else { v.hasDrft = true; v.drft = o["drft"] | 0.0; }
+    const char* d = o["dir"] | "?";
+    v.dir = d[0];
     vesselCount++;
+  }
+
+  // Roster (outer-box one-liners).
+  JsonArray rarr = doc["roster"].as<JsonArray>();
+  rosterCount = 0;
+  for (JsonObject o : rarr) {
+    if (rosterCount >= MAX_R) break;
+    RosterEntry& r = roster[rosterCount];
+    r.name = String((const char*)(o["name"] | "?"));
+    r.op   = String((const char*)(o["op"]   | "UNKNOWN"));
+    const char* d = o["dir"] | "?";
+    r.dir = d[0];
+    rosterCount++;
   }
   if (pairIndex >= vesselCount) pairIndex = 0;
   lastFrameMs = millis();
@@ -262,11 +368,14 @@ void setup() {
 
   W = dma->width();
   H = dma->height();
+  DETAIL_W = W - ROSTER_W;
 
   C_NAME   = dma->color565(255, 200,  40);
   C_LABEL  = dma->color565( 90, 140, 255);
   C_VALUE  = dma->color565(230, 230, 230);
   C_DIM    = dma->color565(110, 110, 110);
+  C_DOWN   = dma->color565( 80, 200, 255);   // downbound (toward sea) cyan
+  C_UP     = dma->color565(255, 150,  60);   // upbound (toward lakes) orange
   C_ACCENT = dma->color565( 60, 220, 120);
 
   screenSplash();
