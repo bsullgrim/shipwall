@@ -21,6 +21,21 @@ import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MMSI_TABLE_PATH = os.path.join(_HERE, "mmsi_to_operator.json")
 
+# Operator key -> 3-letter code shown on the overview board, where the tiny
+# funnel chip can't carry the identification (especially logo-heavy fleets).
+OPERATOR_CODES = {
+    "ALGOMA": "ALG", "CSL": "CSL", "FEDNAV": "FED", "ASC": "ASC",
+    "INTERLAKE": "INT", "LOWERLAKES": "LLT", "DESGAGNES": "DSG",
+    "ANDRIE": "AND", "CLIFFS": "CLF", "G3": "G3", "GLF": "GLF",
+    "HOLCIM": "HOL", "MCASPHALT": "MCA", "NACC": "NAC", "VTB": "VTB",
+    "UNKNOWN": "???",
+}
+
+
+def operator_code(key):
+    """3-letter board code for an operator key."""
+    return OPERATOR_CODES.get(key, "???")
+
 # Operator keys are short, uppercase, and MUST match firmware sprite keys.
 # Name-prefix rules: (prefix, operator_key). Checked in order; first hit wins.
 # Prefixes are matched case-insensitively against the start of the AIS name.

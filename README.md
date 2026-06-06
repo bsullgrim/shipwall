@@ -1,17 +1,55 @@
 # St. Lawrence Ship Wall
 
-A FlightWall-style live display for ship traffic on the upper St. Lawrence
-Seaway, watching the American Narrows from **Chippewa Bay to Oak Point**.
+A FlightWall-style LED display for ship traffic on the upper St. Lawrence
+Seaway, watching the reach from **Cape Vincent down to the Eisenhower Lock**
+near Massena. A Python service subscribes to live AIS, identifies each vessel's
+operator (and thus its funnel livery), and pushes compact frames to an
+ESP32-driven 128×64 LED matrix. The ESP32 is a stateless renderer; all the
+logic lives on the Pi side.
 
-Pieces:
+## Two display variants
 
-- `shipwall_service.py` — runs on a Raspberry Pi / always-on box. Subscribes
-  to AISStream, filters to the reach, identifies operators, and pushes frames.
-- `operators.py` + `mmsi_to_operator.json` — map each vessel to an operator
-  (and thus a funnel sprite), mostly by name prefix.
-- `schedule.py` — sun-based brightness + Seaway-season logic.
-- `make_sprites.py` → `ship_sprites.h` — the funnel-livery sprites.
-- `shipwall_esp32.ino` — runs on the ESP32 / MatrixPortal, drives the panel.
+The project ships **two interchangeable front-ends** that share the same
+sprites, operator identification, and brightness schedule. Pick whichever
+suits your AIS coverage:
+
+- **Live** (`shipwall_*`) — a real-time radar of the American Narrows: detailed
+  cards for ships *in the reach right now*, plus a roster of the wider Seaway.
+  Best when AIS coverage of the Narrows is good.
+- **Register** (`register_*`) — a rolling register of every ship seen in the
+  last ~18 h, deduped to its most recent sighting and stamped "seen Xh ago".
+  Best when coverage is spotty (the live view is empty most of the time, but a
+  multi-hour register is almost always populated): glance out the window, see a
+  laker, then check the wall to learn who it was and where it was bound.
+
+Both render on the same hardware and reuse `ship_sprites.h`, `operators.py`,
+`schedule.py`, and `font5x7.js`.
+
+---
+
+## File map
+
+Shared:
+- `operators.py` + `mmsi_to_operator.json` — map each vessel to an operator key
+  (and thus a funnel sprite) by MMSI lookup then vessel-name rules.
+- `schedule.py` — sun-based brightness + Seaway winter-season logic.
+- `ship_sprites.h` — generated 32×32 RGB565 funnel-livery sprites.
+- `photo_to_sprite.py` + `funnels/` — build sprites from funnel photos.
+- `suggest_palette.py` — sample a funnel image's dominant colors for a palette.
+- `gallery.py` → `gallery.png` — labeled preview of all sprites.
+- `font5x7.js` — 5×7 bitmap font shared by the mock panels.
+
+Live variant:
+- `shipwall_service.py` — AIS subscriber / frame publisher (two-zone frame).
+- `shipwall_esp32.ino` — firmware renderer.
+- `mock_panel.py` — browser stand-in for the panel (no hardware needed).
+- `simulate.py` — synthetic traffic for the mock, no AIS key needed.
+
+Register variant:
+- `register_service.py` — AIS subscriber keeping an N-hour sightings register.
+- `register_panel.py` — browser stand-in with BOARD + DETAIL modes.
+- `register_simulate.py` — synthetic register for the panel, no AIS key needed.
+- `register_esp32.ino` — firmware renderer *(planned; mock is the reference)*.
 
 ---
 
@@ -27,28 +65,24 @@ Recommended build — **two 64×64 panels + MatrixPortal S3**:
 | Panel-to-panel ribbon | Included with panels | incl. |
 | Raspberry Pi (any, incl. Zero 2 W) | Or reuse an always-on box | own? |
 
-The MatrixPortal S3 is strongly recommended over a bare ESP32 at 128×64: it
-has the HUB75 connector and 5V level shifter built in (plug the ribbon
-straight in — no jumpers, no sparkle/ghosting), and its PSRAM gives full color
-and stable 24/7 operation at this resolution. A plain ESP32 works but forces
-8-bit color and sits near its memory ceiling.
-
-A genuine **monolithic 128×64 (P2.5)** single panel also exists and is a
-drop-in alternative to the two chained 64×64s (no seam, one PCB) — source it
-from AliExpress / specialist LED suppliers rather than Western hobby shops.
-
+The MatrixPortal S3 is strongly recommended over a bare ESP32 at 128×64: it has
+the HUB75 connector and 5V level shifter built in (plug the ribbon straight in
+— no jumpers, no sparkle/ghosting), and its PSRAM gives full color and stable
+24/7 operation. A plain ESP32 works but forces 8-bit color and sits near its
+memory ceiling. A monolithic **128×64 (P2.5)** single panel is a drop-in
+alternative to the two chained 64×64s (no seam) — source from AliExpress /
+specialist LED suppliers.
 
 ---
 
 ## Wiring
 
-**With a MatrixPortal S3 (recommended):** there is no signal wiring. Plug
-panel 1's HUB75 ribbon into the board's connector, chain panel 1 OUT → panel 2
-IN, and wire each panel's 5V/GND leads to the supply. In firmware leave
-`USE_DEFAULT_PINS true`.
+**MatrixPortal S3 (recommended):** no signal wiring. Plug panel 1's HUB75
+ribbon into the board, chain panel 1 OUT → panel 2 IN, wire each panel's 5V/GND
+to the supply. Firmware: leave `USE_DEFAULT_PINS true`.
 
-**With a classic ESP32 (hand-wired):** set `USE_DEFAULT_PINS false` in the
-firmware and wire per the DMA library defaults below.
+**Classic ESP32 (hand-wired):** set `USE_DEFAULT_PINS false` and wire per the
+DMA library defaults:
 
 ```
 R1  -> 25      G1  -> 26      B1  -> 27
@@ -59,238 +93,190 @@ CLK -> 16      LAT -> 4       OE  -> 15
 GND -> GND (common ground with the 5V supply!)
 ```
 
-Power the panels from the 5V/4A supply directly. Tie the supply ground to the
-ESP32 ground. The ESP32 itself is powered over USB.
+Power the panels from the 5V supply directly; tie its ground to the ESP32
+ground. The ESP32 is powered over USB.
 
 ---
 
 ## Pi-side setup
 
-1. Get a free API key at https://aisstream.io (sign up, create a key).
-2. Install deps:
-   ```bash
-   pip install websockets aiohttp
-   ```
-3. Run, pointing at your ESP32's IP (from the serial monitor after flashing):
-   ```bash
-   AISSTREAM_KEY=your_key_here ESP32_HOST=192.168.1.50 python3 shipwall_service.py
-   ```
-4. To run on boot, drop it in a systemd unit (see bottom).
+1. Free API key at https://aisstream.io.
+2. Install deps: `pip install websockets aiohttp pillow`
+3. Copy `.env.example` to `.env` and add your key (`.env` is gitignored).
+4. Run **one** of the services, pointed at your ESP32's IP (or the mock):
 
-The bounding box is hard-coded near the top of the script:
+   ```bash
+   # live variant
+   AISSTREAM_KEY=... ESP32_HOST=192.168.1.50 python3 shipwall_service.py
+
+   # register variant (18h default; set REGISTER_HOURS to change)
+   AISSTREAM_KEY=... ESP32_HOST=192.168.1.50 python3 register_service.py
+   ```
+
+Both subscribe to the same outer box (Cape Vincent → Eisenhower Lock),
+hard-coded near the top of each service:
 ```python
-BOUNDING_BOX = [[[44.42, -75.82], [44.58, -75.55]]]
+BOUNDING_BOX = [[[44.10, -76.40], [45.02, -74.78]]]
 ```
-Adjust the corners to widen/narrow the reach.
+The live service also has an inner box (Chippewa Bay → Oak Point) feeding its
+detail cards.
 
 ---
 
 ## ESP32-side setup
 
 1. Arduino IDE → Boards Manager → install **esp32** by Espressif.
-2. Library Manager → install:
-   - `ESP32-HUB75-MatrixPanel-DMA`
-   - `ArduinoJson`
-3. Edit `WIFI_SSID` / `WIFI_PASS` at the top of `shipwall_esp32.ino`
-   (must be a **2.4 GHz** network — the ESP32 has no 5 GHz radio).
-4. Flash. Open the serial monitor at 115200 baud to read the assigned IP.
-5. Put that IP into `ESP32_HOST` when you start the Pi service.
+2. Library Manager → install `ESP32-HUB75-MatrixPanel-DMA` and `ArduinoJson`.
+3. Edit `WIFI_SSID` / `WIFI_PASS` at the top of the `.ino` (2.4 GHz only).
+4. Flash; read the assigned IP from the serial monitor at 115200 baud.
+5. Put that IP into `ESP32_HOST` when starting the Pi service.
 
 ---
 
-## What it shows
+## What each variant shows
 
-Up to 5 vessels, cycling one every 5 seconds:
+### Live variant — two zones
 
-```
-CSL WELLAND
-CARGO 11.4kt
-CRS 62°  DRFT 8.2m
-```
+*Left — American Narrows detail (~88 px).* One big card for a single vessel, or
+a top/bottom split cycling pairs every 6 s: large funnel, name, a down/upbound
+glyph, speed, course, draught, destination. Empty → "AMERICAN NARROWS clear".
 
-Moving vessels are prioritized over moored/anchored ones, so the wall mostly
-shows ships actually transiting the Narrows.
+*Right — upper Seaway roster (~40 px).* Every big commercial ship between Cape
+Vincent and the lock, one line each: direction glyph + name. Moving ships sort
+first; up to 7 rows.
+
+### Register variant — two auto-alternating modes
+
+*BOARD.* A departure-board list, one line per ship: a small funnel color-chip,
+the operator's 3-letter code, a direction arrow, the ship name, and how long
+ago it was seen. Scrolls vertically when the list overflows. Most-recent first.
+
+*DETAIL.* One ship at a time, full screen: the large 32×32 funnel plus the rich
+AIS fields — type + flag, dimensions (e.g. `225x24m`), draught, navigation
+status, destination + ETA, last-seen age. Cycles through the register, then
+returns to the board. Missing fields are simply omitted.
+
+### Shared display behavior
+
+**Down / upbound.** Derived from course over ground (the river runs SW↔NE
+through the reach). *Downbound* (seaward, NE-ish) → cyan ▼; *upbound* (toward
+the lakes, SW-ish) → orange ▲; moored/anchored → grey ■.
+
+**Brightness (sun-based, no extra hardware).** `schedule.py` computes sunrise/
+sunset for the reach and ramps over 30 min at dawn/dusk — bright by day, ~11%
+glow overnight. The Pi stamps the target into each frame; the ESP32 obeys.
+
+**Idle / status screens.** Boot splash, READY+IP, "WAITING / for data" if the
+Pi stops pushing for 60 s, and "SEAWAY CLOSED / reopens March" during the
+winter closure (shown only when the reach is also empty).
+
+**Power behavior.** The ESP32 holds no important state — every frame carries
+everything. Pull power and restore it and the wall repopulates within seconds.
 
 ---
 
-## Stack livery sprites
+## Funnel-livery sprites
 
-The display shows each operator's funnel livery as a 16×16 pixel sprite on the
-right edge, next to the text. The pathway:
+Each operator's funnel is a 32×32 sprite. At this size the band liveries read
+cleanly and most crests are legible; logo-heavy funnels collapse to accurate
+color blocks (intentional — the panel can't show fine logo detail). The
+pathway:
 
 ```
-AIS name/MMSI ──> operators.py ──> operator key ──> frame ──> ESP32 ──> sprite
+AIS name/MMSI ──> operators.py ──> operator key ──> frame ──> renderer ──> sprite
 ```
 
-**Identifying the operator.** `operators.py` maps a vessel to an operator key
-two ways: an explicit `mmsi_to_operator.json` lookup, then vessel-name prefix
-rules (Algoma ships start "ALGO", CSL uses "CSL"/"BAIE", Fednav "FEDERAL",
-etc.). On the Seaway this prefix matching catches most traffic with no manual
-table. Anything unmatched returns `UNKNOWN` and is appended to
-`unknown_vessels.json` so you can classify it later — add the MMSI to
-`mmsi_to_operator.json` or add a prefix rule.
+**Identifying the operator.** `operators.py` maps a vessel two ways: an explicit
+`mmsi_to_operator.json` lookup, then vessel-name rules (Algoma → "ALGO", CSL →
+"CSL"/"BAIE", Fednav → "FEDERAL", Desgagnés by substring, etc.). Unmatched
+vessels return `UNKNOWN` (shown as a ghost sprite) and are appended to
+`unknown_vessels.json` to classify later.
 
-**The sprites themselves.** `make_sprites.py` defines each livery in code and
-exports two files:
-- `sprites_preview.png` — scaled-up visual check
-- `ship_sprites.h` — RGB565 PROGMEM arrays the firmware `#include`s
+Operator keys with sprites: `ALGOMA CSL FEDNAV ASC INTERLAKE LOWERLAKES
+DESGAGNES ANDRIE CLIFFS G3 GLF HOLCIM MCASPHALT NACC VTB`, plus `UNKNOWN`.
+Several (Andrie, Cliffs, G3, GLF, Holcim, McAsphalt, NACC, VTB) have **no name
+pattern** and only resolve via `mmsi_to_operator.json` — populate that table
+from observed sightings (the register's CSV log is good seed data).
 
-To add or refine a livery: edit/​add a `spr_*()` function, add it to the
-`SPRITES` dict with a key matching the operator key in `operators.py`, then:
+**Building sprites from photos.** Drop a funnel image in `funnels/` (transparent
+PNG works best), map it in `funnels/config.json`, and run:
 ```bash
 pip install pillow
-python3 make_sprites.py
+python3 photo_to_sprite.py     # writes ship_sprites.h + sprites_preview.png
+python3 gallery.py             # labeled gallery.png of the whole set
 ```
-and re-flash the ESP32. The supplied liveries are **stylised** for readability
-at 16×16, not exact reproductions — refine them against funnel reference photos
-to taste.
-
-Operator keys currently defined: `CSL`, `ALGOMA`, `FEDNAV`, `LOWERLAKES`,
-`ASC`, `INTERLAKE`, `OGLEBAY`, `UNKNOWN`.
+For muddy funnels, `python3 suggest_palette.py funnels/X.png` prints the
+dominant colors; add them as a `"palette"` so every pixel snaps to true livery
+colors. See `funnels/README.md` for the full tuning guide. Note: the Fednav and
+UNKNOWN (ghost) sprites are hand-authored directly in `ship_sprites.h`; a
+`photo_to_sprite.py` rerun overwrites them and they must be re-injected.
 
 ---
 
 ## Testing without hardware
 
-You can validate the whole system before any panel arrives. `mock_panel.py`
-impersonates the ESP32: it exposes the same `POST /frame` endpoint and draws
-each frame in a browser at http://localhost:8080, reading the real
-`ship_sprites.h` so the preview matches what the panel will show.
+Each variant has a browser mock that impersonates the ESP32 (same `POST /frame`
+endpoint, draws to a canvas at http://localhost:8080 using the real
+`ship_sprites.h`). Run the matching pair — **the mock and service/simulator
+must be from the same variant**, since their frame formats differ.
 
-**Option A — live AIS, no hardware:**
+Live variant:
 ```bash
-# terminal 1
-python3 mock_panel.py                       # open http://localhost:8080
-
-# terminal 2 -- real service, pointed at the mock instead of an ESP32
-AISSTREAM_KEY=your_key ESP32_HOST=localhost:8080 python3 shipwall_service.py
-```
-Watch live St. Lawrence traffic render. (In the winter closure, or when the
-reach is quiet, you'll see the idle/closed screens instead of vessels — that's
-correct.)
-
-**Option B — no AIS key either:** `simulate.py` feeds synthetic Seaway traffic
-through the mock, cycling every display state (0 → 1 → 2 → 4 vessels → winter
-closed) so you can see the adaptive layout, pair cycling, sprites, and
-brightness work end to end:
-```bash
-python3 mock_panel.py        # terminal 1
-python3 simulate.py          # terminal 2
+python3 mock_panel.py          # terminal 1
+python3 simulate.py            # terminal 2 (synthetic; no AIS key)
+# or, live AIS through the mock:
+AISSTREAM_KEY=... ESP32_HOST=localhost:8080 python3 shipwall_service.py
 ```
 
-When the hardware arrives, nothing about the Pi side changes — you just point
-`ESP32_HOST` at the panel's real IP instead of `localhost:8080`.
+Register variant:
+```bash
+python3 register_panel.py      # terminal 1
+python3 register_simulate.py   # terminal 2 (synthetic; no AIS key)
+#   set BIG=1 to overflow the board and watch it scroll
+# or, live AIS through the panel:
+AISSTREAM_KEY=... ESP32_HOST=localhost:8080 python3 register_service.py
+```
 
-### Logging what the feed actually delivers
+Both panels serve on port 8080, so run only one at a time. The register page
+title reads "recent-sightings register"; the live page reads "live preview".
 
-To characterize coverage over hours without watching the panel, set
-`SHIPWALL_LOG` to a CSV path. The service logs every vessel AISStream delivers
-— once when first seen, and again only when its name/type resolves — so the
-file stays compact even over a long run:
+### Unattended logging
+
+Both services log every vessel the feed delivers to a CSV (first seen, and again
+when its name/operator resolves — deduped so it stays compact over long runs):
 
 ```bash
-SHIPWALL_LOG=ships.csv AISSTREAM_KEY=... python3 shipwall_service.py
-```
-```powershell
-$env:SHIPWALL_LOG="ships.csv"; python shipwall_service.py
+SHIPWALL_LOG=ships.csv   python3 shipwall_service.py    # live
+REGISTER_LOG=register.csv python3 register_service.py    # register
 ```
 
-Columns: timestamp, event (first_seen/updated), mmsi, name, type_code, type,
-lat, lon, sog, cog, dest, `in_inner` (was it in the American Narrows box), and
-`roster_ok` (would it qualify for the roster). Open it in a spreadsheet
-afterward to count distinct vessels, see how many were big commercial ships,
-and judge whether your feed's coverage of the reach is good enough. Appends
-across restarts; delete the file to start fresh.
+The register CSV includes the resolved operator/code/flag per vessel, making it
+the best seed for building `mmsi_to_operator.json`: filter to `operator=UNKNOWN`,
+read off the names + MMSIs, and map them. Both CSVs append across restarts.
 
-### Screenshots of ships in the detail view
-
-The mock panel automatically saves a screenshot whenever a new ship appears in
-the left detail zone, to a `captures/` folder. One PNG per ship per visit
-(named `<timestamp>_<SHIP_NAME>.png`, upscaled 6× for viewability), so you can
-leave the browser open for hours and review which vessels actually reached the
-American Narrows without watching live. Requires the browser tab to stay open
-(the capture happens in-page); `captures/` is gitignored.
-
----
-
-
-
-**Two zones.** The panel splits into a detailed view on the left (~88px) and a
-seaway roster on the right (~40px).
-
-*Left — American Narrows detail.* The Chippewa Bay → Oak Point reach: one big
-card for a single vessel, or a two-vessel split, with funnel, name, a
-down/upbound glyph, speed, course, draught, destination. Adaptive: one vessel →
-big card; two or more → top/bottom split, cycling pairs every 6 s when more
-than two are present. Empty → "AMERICAN NARROWS clear" (the roster may still be
-busy).
-
-*Right — upper Seaway roster.* Every big commercial ship (cargo, tanker, tug,
-passenger; pleasure craft and fishing filtered out) between Cape Vincent and
-Oak Point, one line each: a mini funnel sprite, a direction glyph, and a
-4-character name. Moving ships sort to the top; up to 7 rows.
-
-**Down / upbound.** Derived from course over ground, since the river's axis
-through the Narrows runs SW↔NE. *Downbound* (seaward, NE-ish) shows a cyan ▼;
-*upbound* (toward Lake Ontario and the upper lakes, SW-ish) an orange ▲;
-moored/anchored a grey ■.
-
-**Brightness (sun-based, no extra hardware).** `schedule.py` computes sunrise
-and sunset for the river reach and ramps brightness over a 30-minute window at
-dawn and dusk — bright by day, a faint ~11% glow overnight. It tracks the
-seasons automatically. Tune `BRIGHT_DAY` / `BRIGHT_NIGHT` in `schedule.py`.
-The Pi stamps the target into every frame; the ESP32 just obeys, so there's no
-clock or NTP code on-device.
-
-**Idle / status screens.** The panel is never blank or stale:
-- *Splash* on boot while WiFi connects.
-- *READY + IP* once connected (note the IP for `ESP32_HOST`).
-- *"ST LAWRENCE / no vessels"* in season when nothing's on the water.
-- *"SEAWAY CLOSED / reopens March"* during the winter closure (auto). A ship
-  appearing in that window is still shown — the closure screen only displays
-  when the reach is also empty.
-- *"WAITING / for data"* if the Pi stops pushing for 60 s, so a crash or drop
-  is obvious rather than freezing on a stale ship.
-
-**Power behavior.** The ESP32 holds no important state — every frame carries
-vessels, brightness, and season. Pull power and restore it and the wall shows
-live traffic within seconds. Run the Pi service under systemd (below) so both
-ends auto-start on boot.
+Both mock panels also auto-save a 6×-upscaled PNG to `captures/` the first time
+a vessel appears (deduped), so you can review what came through without watching
+live. Requires the browser tab to stay open; `captures/` is gitignored.
 
 ---
 
 ## Keeping your API key out of git
 
-The AISStream key never lives in committed code. The service reads it from the
-environment (or a local, gitignored `.env` file). To set up:
-
+The AISStream key is read from the environment or a gitignored `.env`:
 ```bash
-cp .env.example .env        # .env is gitignored
-# edit .env, add your real key
-python3 shipwall_service.py # the service auto-loads .env
+cp .env.example .env     # add your real key here
 ```
-
-`.gitignore` already excludes `.env`, `*.key`, and `secrets.json`, so the key
-can't be committed by accident. The repo ships only `.env.example` (a template
-with no real value). A real environment variable always overrides the file, so
-the systemd unit (which sets `Environment=AISSTREAM_KEY=...`) works without a
-`.env` present.
-
-If a key ever does land in a commit: treat it as compromised, **rotate it** at
-aisstream.io (revoke + reissue), and update your local `.env`. Scrubbing git
-history is possible (`git filter-repo`) but rotating is faster and safer, since
-the old key may already be cached by GitHub, forks, or scrapers. AISStream keys
-are free and unprivileged, so the blast radius is small — but rotate anyway.
-
-For the systemd unit, keep the key in the unit file (root-readable only) or in
-a separate `EnvironmentFile=` that you also gitignore; don't paste it into any
-file inside the repo.
+`.gitignore` excludes `.env`, `*.key`, `ships*.csv`, `register*.csv`,
+`captures/`, and source funnel photos. A real environment variable overrides the
+file, so a systemd unit works without a `.env`. If a key lands in a commit,
+**rotate it** at aisstream.io — that's faster and safer than scrubbing history.
 
 ---
 
+## Run on boot (systemd)
 
-
-`/etc/systemd/system/shipwall.service`:
+`/etc/systemd/system/shipwall.service` (swap the ExecStart for whichever
+variant you run):
 ```ini
 [Unit]
 Description=St. Lawrence Ship Wall
@@ -300,7 +286,7 @@ Wants=network-online.target
 [Service]
 Environment=AISSTREAM_KEY=your_key_here
 Environment=ESP32_HOST=192.168.1.50
-ExecStart=/usr/bin/python3 /home/pi/shipwall/shipwall_service.py
+ExecStart=/usr/bin/python3 /home/pi/shipwall/register_service.py
 Restart=always
 RestartSec=10
 
@@ -313,12 +299,11 @@ sudo systemctl enable --now shipwall
 
 ---
 
-## Tuning ideas
+## Notes on AIS coverage
 
-- **Brightness schedule:** the DMA lib supports `setBrightness8()`; gate it on
-  time-of-day pushed from the Pi for a dim night mode.
-- **Filter by ship type:** only show CARGO/TANKER (the big salties and lakers)
-  by filtering in `build_frame()`.
-- **Seaway flavor:** the upper river is seasonal — the Seaway closes in winter.
-  A "SEAWAY CLOSED" idle screen for Jan–Mar is a nice touch.
-- **Track-a-ship mode:** pin one MMSI and always show it when in box.
+AISStream is a free, community/terrestrial receiver network; coverage of the
+upper St. Lawrence is partial, so some vessels visible on commercial trackers
+(MarineTraffic, etc.) may not appear. This is a data-source limitation, not a
+bug — and it's the reason the register variant exists. For full local coverage,
+a ~$30 RTL-SDR receiver running AIS-catcher near the river produces the same
+AIS messages locally and drops into either service unchanged.

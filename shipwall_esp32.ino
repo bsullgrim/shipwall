@@ -133,11 +133,13 @@ const uint16_t* spriteFor(const Vessel& v) {
 void drawDirGlyph(char dir, int x, int y) {
   uint16_t col = (dir == 'D') ? C_DOWN : (dir == 'U') ? C_UP : C_DIM;
   if (dir == 'D') {
+    // Point down: wide top row, narrowing to a point at the bottom.
     for (int r = 0; r < 4; r++)
-      for (int c = r; c < 4 - r + 1; c++) dma->drawPixel(x + c, y + r, col);
+      for (int c = r; c <= 4 - r; c++) dma->drawPixel(x + c, y + r, col);
   } else if (dir == 'U') {
+    // Point up: vertical mirror of 'D' -- point at top, wide at the bottom.
     for (int r = 0; r < 4; r++)
-      for (int c = (3 - r); c <= r + 1; c++) dma->drawPixel(x + c, y + 3 - r, col);
+      for (int c = r; c <= 4 - r; c++) dma->drawPixel(x + c, y + (3 - r), col);
   } else if (dir == 'M') {
     for (int r = 1; r < 4; r++)
       for (int c = 1; c < 4; c++) dma->drawPixel(x + c, y + r, col);
@@ -148,6 +150,7 @@ void drawDirGlyph(char dir, int x, int y) {
 
 // Render the right-side roster: one line per ship, dir glyph + name.
 // (No mini funnel -- those pixels go to a longer name.)
+void printClipped(const String& s, int x, int maxX, uint16_t col);  // fwd decl
 void drawRoster() {
   const int rx = DETAIL_W;                 // roster zone left edge
   // vertical divider
@@ -160,25 +163,35 @@ void drawRoster() {
     int y = i * rowH;
     int x = rx + 2;
     drawDirGlyph(roster[i].dir, x, y + (rowH - 5) / 2);
-    dma->setTextColor(C_VALUE);
     dma->setCursor(x + 7, y + (rowH - 7) / 2);
-    dma->print(roster[i].name);
+    printClipped(roster[i].name, x + 7, W, C_VALUE);  // stop at panel edge
   }
 }
 
 // Draw one vessel within a band whose top is `top` and height is `bandH`.
 // `big` selects the spacious single-vessel layout vs. the compact split row.
+// Print `s` at the current cursor but clip to at most `maxX` (exclusive),
+// so detail-zone text never crosses into the roster. 6px per glyph.
+void printClipped(const String& s, int x, int maxX, uint16_t col) {
+  int maxChars = (maxX - x) / 6;
+  if (maxChars < 1) return;
+  dma->setTextColor(col);
+  dma->setCursor(x, dma->getCursorY());
+  if ((int)s.length() <= maxChars) dma->print(s);
+  else dma->print(s.substring(0, maxChars));
+}
+
 void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
   dma->setTextSize(1);
+  const int edge = DETAIL_W - 1;                  // text must stop before divider
 
   if (big) {
     // Big card: name across the top, then a large funnel lower-left with the
     // metrics stacked to its right -- the FlightWall "logo is prominent" look.
-    dma->setTextColor(C_NAME);
     dma->setCursor(1, top + 1);
-    dma->print(v.name);
-    int dirX = 1 + v.name.length() * 6 + 2;
-    if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
+    printClipped(v.name, 1, edge - 5, C_NAME);    // leave room for dir glyph
+    int dirX = 1 + min((int)v.name.length(), (edge - 5 - 1) / 6) * 6 + 2;
+    if (dirX < edge - 4) drawDirGlyph(v.dir, dirX, top + 1);
 
     // Funnel: full sprite size, sitting below the name on the left.
     int fdim = SPRITE_SIZE;                       // 32px
@@ -202,7 +215,7 @@ void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
     if (v.dest.length() > 0) {
       dma->setCursor(tx, top + 50);
       dma->setTextColor(C_DIM);   dma->print(">");
-      dma->setTextColor(C_VALUE); dma->print(v.dest);
+      printClipped(v.dest, tx + 6, edge, C_VALUE);
     }
   } else {
     // Split row (32px band): funnel inset to ~28px on the left, two compact
@@ -213,21 +226,20 @@ void drawVesselBand(const Vessel& v, int top, int bandH, bool big) {
     drawSpriteScaled(spriteFor(v), 1, fy, fdim);
 
     int tx = fdim + 4;
-    dma->setTextColor(C_NAME);
     dma->setCursor(tx, top + 1);
-    dma->print(v.name);
-    int dirX = tx + v.name.length() * 6 + 2;
-    if (dirX < DETAIL_W - 5) drawDirGlyph(v.dir, dirX, top + 1);
+    printClipped(v.name, tx, edge - 5, C_NAME);   // leave room for dir glyph
+    int dirX = tx + min((int)v.name.length(), (edge - 5 - tx) / 6) * 6 + 2;
+    if (dirX < edge - 4) drawDirGlyph(v.dir, dirX, top + 1);
 
+    // Speed + course, no degree sign (course is obviously degrees), clipped.
+    String row1 = String(v.sog, 1) + "kt " + String(v.cog);
     dma->setCursor(tx, top + 12);
-    dma->setTextColor(C_VALUE); dma->print(v.sog, 1);
-    dma->setTextColor(C_DIM);   dma->print("kt ");
-    dma->setTextColor(C_LABEL); dma->print(v.cog);
-    dma->setTextColor(C_DIM);   dma->print((char)247);
+    printClipped(row1, tx, edge, C_VALUE);
 
-    dma->setCursor(tx, top + 22);
-    dma->setTextColor(C_DIM);
-    if (v.dest.length() > 0) dma->print(v.dest);
+    if (v.dest.length() > 0) {
+      dma->setCursor(tx, top + 22);
+      printClipped(v.dest, tx, edge, C_DIM);
+    }
   }
 }
 

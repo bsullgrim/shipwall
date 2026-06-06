@@ -171,6 +171,34 @@ function txtClip(s,x,y,maxX,col){
   if(maxChars<1)return;
   txt(s.length<=maxChars?s:s.slice(0,maxChars),x,y,col);
 }
+
+// Marquee: if `s` fits in [x,maxX) draw it static; otherwise scroll it
+// horizontally, clipped to that window, pausing at each end. `key` identifies
+// this text field so its scroll phase persists across frames. Driven by the
+// global animation clock (animT, ms).
+const marquee={};            // key -> {t0}
+function txtMarquee(s,x,y,maxX,col,key){
+  const winW=maxX-x;
+  const fullW=s.length*GLYPH_ADV;
+  if(fullW<=winW){ txt(s,x,y,col); return; }      // fits: no scroll
+  const SPEED=18;            // px/sec scroll
+  const PAUSE=1500;          // ms pause at each end
+  const travel=fullW-winW;   // px we need to scroll through
+  const scrollMs=travel/SPEED*1000;
+  const cycle=PAUSE+scrollMs+PAUSE;               // pause, scroll, pause
+  if(!marquee[key]) marquee[key]={t0:animT};
+  let p=((animT-marquee[key].t0)%cycle);
+  let off;
+  if(p<PAUSE) off=0;                              // hold at start
+  else if(p<PAUSE+scrollMs) off=(p-PAUSE)/scrollMs*travel;
+  else off=travel;                                // hold at end
+  // Draw each glyph shifted by -off, clipped to the window.
+  let gx=x-off;
+  for(const ch of s){
+    if(gx>x-GLYPH_ADV && gx<maxX) glyph(ch,Math.round(gx),y,col);
+    gx+=GLYPH_ADV;
+  }
+}
 function textWidth(s){ return s.length*GLYPH_ADV-1; }
 function centered(s,y,col){ txt(s,Math.floor((W-textWidth(s))/2),y,col); }
 
@@ -189,11 +217,12 @@ function spriteScaled(key,ox,oy,dim){
 
 function band(v,top,bandH,big){
   const edge=DETAIL_W-1;                     // text stops before divider
+  // Direction glyph sits fixed at the right of the detail zone (doesn't scroll).
+  if(v.dir) dirGlyph(v.dir,edge-5,top+1);
+  const nameMax=edge-7;                      // name marquees up to the glyph
   if(big){
     // Name across the top, large funnel lower-left, metrics to its right.
-    txtClip(v.name,1,top+1,edge-5,C.name);
-    const dirX=1+Math.min(v.name.length,Math.floor((edge-5-1)/6))*6+2;
-    if(v.dir && dirX<edge-4) dirGlyph(v.dir,dirX,top+1);
+    txtMarquee(v.name,1,top+1,nameMax,C.name,'big-name');
     const fdim=SPRITE_SIZE;                 // 32px
     const fy=top+bandH-fdim;
     spriteScaled(v.op,1,fy,fdim);
@@ -201,19 +230,16 @@ function band(v,top,bandH,big){
     txt(v.sog.toFixed(1)+'kt',tx,top+14,C.value);
     txt('CRS'+v.cog,tx,top+26,C.value);
     if(v.drft!=null)txt('DR'+v.drft.toFixed(1),tx,top+38,C.value);
-    if(v.dest)txtClip('>'+v.dest,tx,top+50,edge,C.dim);
+    if(v.dest)txtMarquee(v.dest,tx,top+50,edge,C.dim,'big-dest');
   }else{
     // Split row: ~28px funnel inset left, two compact text rows right.
     let fdim=bandH-4; if(fdim>SPRITE_SIZE)fdim=SPRITE_SIZE;
     const fy=top+((bandH-fdim)>>1);
     spriteScaled(v.op,1,fy,fdim);
     const tx=fdim+4;
-    txtClip(v.name,tx,top+1,edge-5,C.name);
-    const dirX=tx+Math.min(v.name.length,Math.floor((edge-5-tx)/6))*6+2;
-    if(v.dir && dirX<edge-4) dirGlyph(v.dir,dirX,top+1);
-    // speed + course, no degree sign, clipped
+    txtMarquee(v.name,tx,top+1,nameMax,C.name,'split'+top+'-name');
     txtClip(v.sog.toFixed(1)+'kt '+v.cog,tx,top+12,edge,C.value);
-    if(v.dest)txtClip(v.dest,tx,top+22,edge,C.dim);
+    if(v.dest)txtMarquee(v.dest,tx,top+22,edge,C.dim,'split'+top+'-dest');
   }
 }
 
@@ -223,8 +249,8 @@ const C2={down:'#50c8ff',up:'#ff963c'};
 function dirGlyph(dir,x,y){
   const col=dir==='D'?C2.down:dir==='U'?C2.up:C.dim;
   cx.fillStyle=col;
-  if(dir==='D'){for(let r=0;r<4;r++)for(let c=r;c<4-r+1;c++)cx.fillRect(x+c,y+r,1,1);}
-  else if(dir==='U'){for(let r=0;r<4;r++)for(let c=3-r;c<=r+1;c++)cx.fillRect(x+c,y+3-r,1,1);}
+  if(dir==='D'){for(let r=0;r<4;r++)for(let c=r;c<=4-r;c++)cx.fillRect(x+c,y+r,1,1);}
+  else if(dir==='U'){for(let r=0;r<4;r++)for(let c=r;c<=4-r;c++)cx.fillRect(x+c,y+(3-r),1,1);}
   else if(dir==='M'){for(let r=1;r<4;r++)for(let c=1;c<4;c++)cx.fillRect(x+c,y+r,1,1);}
   else cx.fillRect(x+2,y+2,1,1);
 }
@@ -295,19 +321,28 @@ function captureCanvas(name){
   }catch(e){}
 }
 
+let latestData={ts:0,bright:128,closed:false,vessels:[],roster:[]};
+let animT=0;
 async function poll(){
   try{
     const r=await fetch('/latest');const f=await r.json();
     if(f.ts) lastFrame=Date.now();
-    render(f);
+    latestData=f;
     document.getElementById('meta').textContent=
       f.vessels.length+' in narrows  |  '+(f.roster||[]).length+' in seaway  |  '+
       'bright '+f.bright+'/255  |  '+(f.closed?'CLOSED':'in season');
   }catch(e){}
 }
+// Continuous render loop drives marquee scrolling between data polls.
+function frame(t){
+  animT=t;
+  render(latestData);
+  requestAnimationFrame(frame);
+}
 setInterval(poll,1000);
 setInterval(()=>{pairIndex+=2;},6000);
 poll();
+requestAnimationFrame(frame);
 </script></body></html>"""
 
 

@@ -1,0 +1,35 @@
+# --- Secrets: never commit these ---
+.env
+.env.*
+!.env.example
+*.key
+secrets.json
+
+# --- Local runtime artifacts ---
+unknown_vessels.json      # grows at runtime; not source
+ships.csv                 # vessel coverage log; not source
+ships*.csv                # any timestamped variants of the coverage log
+register.csv              # register-variant vessel log; not source
+register*.csv             # timestamped variants
+captures/                 # mock-panel screenshots; local only
+sprites_preview.png       # regenerated from sprites; not source
+# Source funnel photos: kept local, NOT committed. They're typically
+# someone else's copyrighted photographs (e.g. from boatnerd); republishing
+# them in a public repo would be redistribution. The generated ship_sprites.h
+# is your own derived artifact and IS committed.
+funnels/*.jpg
+funnels/*.jpeg
+funnels/*.png
+funnels/*.webp
+funnels/*.bmp
+captures/*.png
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Editor / OS noise ---
+.vscode/
+.idea/
+.DS_Store
+*.swp
