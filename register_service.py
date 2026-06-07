@@ -48,6 +48,11 @@ if not API_KEY:
     print("ERROR: set AISSTREAM_KEY (in .env or environment).")
     sys.exit(1)
 
+# Transport to the renderer. Set ESP32_SERIAL=/dev/ttyACM0 (or COM3 on Windows)
+# to push frames over USB serial to the MatrixPortal; otherwise frames are
+# HTTP-POSTed to ESP32_HOST (used by the browser mock). Serial takes priority.
+ESP32_SERIAL = os.environ.get("ESP32_SERIAL", "").strip()
+SERIAL_BAUD = int(os.environ.get("ESP32_BAUD", "115200"))
 ESP32_HOST = os.environ.get("ESP32_HOST", "localhost:8080")
 ESP32_URL = f"http://{ESP32_HOST}/frame"
 
@@ -57,7 +62,7 @@ if sys.platform.startswith("win"):
 WS_URL = "wss://stream.aisstream.io/v0/stream"
 
 # Outer box: Cape Vincent -> Eisenhower Lock (same reach as the live version).
-BOUNDING_BOX = [[[44.10, -76.40], [45.02, -74.78]]]
+BOUNDING_BOX = [[[44.10, -76.40], [45.3237, -73.9132]]]
 
 PUSH_INTERVAL  = 10                                   # seconds between frames
 RETAIN_HOURS   = float(os.environ.get("REGISTER_HOURS", "18"))
@@ -109,6 +114,36 @@ MID_COUNTRY = {
 def country_for(mmsi):
     s = str(mmsi)
     return MID_COUNTRY.get(s[:3]) if len(s) >= 3 else None
+
+
+# --- Position along the river (for the detail card's progress line) ----------
+# The reach is ~linear; project a lat/lon onto the axis from Lake Ontario
+# (Cape Vincent) to the downriver box edge (Snell/Beauharnois lock) and report
+# progress 0.0 (lake) .. 1.0 (lock). Avoids pulling in Montreal harbor traffic.
+RIVER_LO  = (44.13, -76.37)            # Lake Ontario end (Cape Vincent)
+RIVER_MTL = (45.3237, -73.9132)        # downriver end (lock, box NE corner)
+# Your reference point on the river -- Danger Island, 233 Riverledge Road.
+# 44°30'00.0"N 75°36'00.0"W
+HOME_POINT = (44.5000, -75.6000)
+
+
+def river_progress(lat, lon):
+    """Fraction 0..1 of the way from the Lake Ontario end to Montreal,
+    by projecting (lat,lon) onto the LO->MTL axis. None if no position."""
+    if lat is None or lon is None:
+        return None
+    ax, ay = RIVER_LO[1], RIVER_LO[0]          # x=lon, y=lat
+    bx, by = RIVER_MTL[1], RIVER_MTL[0]
+    px, py = lon, lat
+    dx, dy = bx - ax, by - ay
+    denom = dx * dx + dy * dy
+    if denom == 0:
+        return 0.0
+    t = ((px - ax) * dx + (py - ay) * dy) / denom
+    return max(0.0, min(1.0, t))
+
+
+HOME_PROGRESS = river_progress(HOME_POINT[0], HOME_POINT[1])
 
 
 def bound_dir(cog, sog):
@@ -250,8 +285,13 @@ def build_frame():
     eligible = [v for v in vessels.values()
                 if _eligible(v.get("type_code"))
                 and (v.get("lat") is not None or v.get("name"))]
-    # Most-recently-seen first.
-    eligible.sort(key=lambda v: v.get("last", 0), reverse=True)
+    # Named ships first (most-recent within that group), then nameless
+    # MMSI-only fragments at the bottom. has_name=0 sorts before has_name=1;
+    # negative time sorts newest-first within each group.
+    def sort_key(v):
+        has_name = 0 if (v.get("name") or "").strip() else 1
+        return (has_name, -v.get("last", 0))
+    eligible.sort(key=sort_key)
 
     ships = []
     for v in eligible:
@@ -283,6 +323,7 @@ def build_frame():
             "imo": v.get("imo"),
             "age": age_string(age),
             "age_secs": int(age),
+            "progress": river_progress(v.get("lat"), v.get("lon")),
         })
 
     return {
@@ -290,22 +331,59 @@ def build_frame():
         "bright": target_brightness(),
         "closed": seaway_closed(),
         "hours": RETAIN_HOURS,
+        "home": HOME_PROGRESS,
         "ships": ships,
     }
 
 
-# --- Networking ---------------------------------------------------------------
+# --- Transport: serial (hardware) or HTTP (mock) -----------------------------
+_serial_port = None
+
+
+def _open_serial():
+    global _serial_port
+    try:
+        import serial  # pyserial
+    except ImportError:
+        print("[serial] pyserial not installed: pip install pyserial")
+        sys.exit(1)
+    try:
+        _serial_port = serial.Serial(ESP32_SERIAL, SERIAL_BAUD, timeout=1)
+        print(f"[serial] open {ESP32_SERIAL} @ {SERIAL_BAUD}")
+    except Exception as e:
+        print(f"[serial] could not open {ESP32_SERIAL}: {e}")
+        sys.exit(1)
+
+
 async def pusher(session):
+    if ESP32_SERIAL:
+        _open_serial()
     while True:
         await asyncio.sleep(PUSH_INTERVAL)
         frame = build_frame()
-        try:
-            async with session.post(ESP32_URL, json=frame, timeout=5) as resp:
-                await resp.read()
-            print(f"[push] {len(frame['ships'])} ships in register "
-                  f"(last {RETAIN_HOURS:.0f}h) -> display")
-        except Exception as e:
-            print(f"[push] failed: {e}")
+        n = len(frame["ships"])
+        if ESP32_SERIAL:
+            # Newline-delimited JSON: one frame per line, '\n'-terminated.
+            try:
+                line = (json.dumps(frame, separators=(",", ":")) + "\n").encode()
+                _serial_port.write(line)
+                _serial_port.flush()
+                print(f"[push] {n} ships -> serial {ESP32_SERIAL}")
+            except Exception as e:
+                print(f"[push] serial write failed: {e}; reopening")
+                try:
+                    _serial_port.close()
+                except Exception:
+                    pass
+                _open_serial()
+        else:
+            try:
+                async with session.post(ESP32_URL, json=frame, timeout=5) as resp:
+                    await resp.read()
+                print(f"[push] {n} ships in register "
+                      f"(last {RETAIN_HOURS:.0f}h) -> {ESP32_HOST}")
+            except Exception as e:
+                print(f"[push] HTTP failed: {e}")
 
 
 def handle_message(msg):
@@ -344,5 +422,8 @@ async def subscribe():
 if __name__ == "__main__":
     print("St. Lawrence Ship Wall -- REGISTER mode")
     print(f"  Retention: {RETAIN_HOURS:.0f} hours")
-    print(f"  Display:   {ESP32_URL}")
+    if ESP32_SERIAL:
+        print(f"  Display:   serial {ESP32_SERIAL} @ {SERIAL_BAUD}")
+    else:
+        print(f"  Display:   HTTP {ESP32_URL}")
     asyncio.run(subscribe())

@@ -53,65 +53,85 @@ Register variant:
 
 ---
 
-## Parts list (~$110–135)
+## Parts list (~$140)
 
-Recommended build — **two 64×64 panels + MatrixPortal S3**:
+The reference build (what this project is wired and documented for):
 
-| Part | Notes | Approx |
-|------|-------|--------|
-| 2× 64×64 HUB75E panel, P3 or P4 | Chained to 128×64; HUB75E (E line) required | $50–70 |
-| Adafruit MatrixPortal S3 | ESP32-S3 + HUB75 connector + level shifter + PSRAM | $25 |
-| 5V / 8A power supply | Two 64×64 panels at full white pull ~6–7 A | $15 |
-| Panel-to-panel ribbon | Included with panels | incl. |
-| Raspberry Pi (any, incl. Zero 2 W) | Or reuse an always-on box | own? |
+| Part | Adafruit ID | Notes | Approx |
+|------|-------------|-------|--------|
+| 128×64 RGB LED matrix, **2 mm pitch** | 6484 | Single monolithic panel (no chaining/seam). 256×128 mm. **Non-standard 5-address (ABCDE) mux, 1/32 scan.** Includes IDC ribbon + power cable. | $75 |
+| Adafruit **MatrixPortal S3** | 5778 | ESP32-S3 renderer; HUB75 connector + level shifter + PSRAM built in. Drives the 6484 with **no solder jumper**. | $20 |
+| **Raspberry Pi 3 Model B** (or any always-on box) | 3055 | Runs the Python AIS service over WiFi. The Pi does logic only — not LED refresh — so a Pi 3 is plenty. | $35 |
+| 5V 2.5A micro-USB supply | 1995 | Powers the **Pi 3**. | $8 |
+| **5V 4A supply + 2.1 mm barrel jack** | 1466 (+368) | Powers the **panel** (up to ~4 A). *Separate from the Pi supply — this is the one easy to forget.* | $15 |
+| USB-A → USB-C cable, short | — | **Pi → MatrixPortal**: serial frame link *and* MatrixPortal logic power, one cable. | $5 |
+| microSD card, 16 GB+ | — | Raspberry Pi OS Lite for the Pi 3. | $6 |
 
-The MatrixPortal S3 is strongly recommended over a bare ESP32 at 128×64: it has
-the HUB75 connector and 5V level shifter built in (plug the ribbon straight in
-— no jumpers, no sparkle/ghosting), and its PSRAM gives full color and stable
-24/7 operation. A plain ESP32 works but forces 8-bit color and sits near its
-memory ceiling. A monolithic **128×64 (P2.5)** single panel is a drop-in
-alternative to the two chained 64×64s (no seam) — source from AliExpress /
-specialist LED suppliers.
+Optional finishing: a deep shadowbox frame (hides the Pi, MatrixPortal, supply,
+and cabling), and a smoked/black diffusion acrylic over the panel face (hides
+the LED grid, deepens blacks, gives the "screen" look).
+
+Notes:
+- The **6484 panel uses 5-address (ABCDE) multiplexing** — fine on the
+  MatrixPortal S3, but the firmware must be configured for it (1/32 scan,
+  5-address), not the 4-address default, or the image is scrambled.
+- The panel kit **includes its IDC ribbon and 4-pin power cable** — no need to
+  buy those.
+- A monolithic 128×64 needs **no chaining** — one ribbon to the MatrixPortal,
+  one 5 V feed to the panel.
 
 ---
 
-## Wiring
+## Architecture & wiring
 
-**MatrixPortal S3 (recommended):** no signal wiring. Plug panel 1's HUB75
-ribbon into the board, chain panel 1 OUT → panel 2 IN, wire each panel's 5V/GND
-to the supply. Firmware: leave `USE_DEFAULT_PINS true`.
-
-**Classic ESP32 (hand-wired):** set `USE_DEFAULT_PINS false` and wire per the
-DMA library defaults:
+**Pi + ESP32, linked by USB serial, both inside the frame.** The Pi runs the
+Python service (AIS → identify → build frames) and sends frames down a USB
+cable to the MatrixPortal S3, which renders them to the panel. The ESP32 needs
+**no WiFi** — only the Pi is networked (for AIS). One USB cable carries both the
+frame data and the MatrixPortal's logic power.
 
 ```
-R1  -> 25      G1  -> 26      B1  -> 27
-R2  -> 14      G2  -> 12      B2  -> 13
-A   -> 23      B   -> 19      C   -> 5
-D   -> 17      E   -> 18
-CLK -> 16      LAT -> 4       OE  -> 15
-GND -> GND (common ground with the 5V supply!)
+   AIS (WiFi) ──> Raspberry Pi 3 ──USB serial──> MatrixPortal S3 ──HUB75──> 128×64 panel
+                  (Python service)               (renderer)                 ^
+                       ^                                                     │
+                  5V 2.5A (1995)                              5V 4A barrel (1466) ── panel power
 ```
 
-Power the panels from the 5V supply directly; tie its ground to the ESP32
-ground. The ESP32 is powered over USB.
+**Connections:**
+- Panel IDC ribbon → MatrixPortal HUB75 connector (plug-in, keyed).
+- Panel 4-pin power → 5V/4A supply via the barrel jack + screw terminal.
+- MatrixPortal USB-C → Pi USB-A (data + MatrixPortal power).
+- Pi powered from its own 5V/2.5A micro-USB supply.
+
+**One wall plug:** feed both the panel's 5V/4A supply and the Pi's 5V/2.5A
+supply from a small power strip — that strip's plug is your single wall outlet.
+(Don't power the panel from the Pi or the MatrixPortal; it needs its own 5 V.)
+
+**Firmware note:** the MatrixPortal renders over USB serial, not WiFi. Configure
+the panel as 128×64, 1/32 scan, **5-address (ADDX_E)** in the
+`ESP32-HUB75-MatrixPanel-DMA` setup, and read frames as newline-delimited JSON
+from the USB serial port.
 
 ---
 
 ## Pi-side setup
 
 1. Free API key at https://aisstream.io.
-2. Install deps: `pip install websockets aiohttp pillow`
+2. Install deps: `pip install websockets aiohttp pillow pyserial`
 3. Copy `.env.example` to `.env` and add your key (`.env` is gitignored).
-4. Run **one** of the services, pointed at your ESP32's IP (or the mock):
+4. Run **one** of the services. On hardware, point it at the MatrixPortal's USB
+   serial device; for the browser mock, point it at the mock's HTTP host:
 
    ```bash
-   # live variant
-   AISSTREAM_KEY=... ESP32_HOST=192.168.1.50 python3 shipwall_service.py
+   # --- hardware (USB serial to the MatrixPortal) ---
+   AISSTREAM_KEY=... ESP32_SERIAL=/dev/ttyACM0 python3 register_service.py
 
-   # register variant (18h default; set REGISTER_HOURS to change)
-   AISSTREAM_KEY=... ESP32_HOST=192.168.1.50 python3 register_service.py
+   # --- browser mock (HTTP) ---
+   AISSTREAM_KEY=... ESP32_HOST=localhost:8080 python3 register_service.py
    ```
+   (The live variant works the same way with `shipwall_service.py`.) The Pi's
+   serial device is usually `/dev/ttyACM0` for the MatrixPortal; check with
+   `ls /dev/ttyACM*` after plugging it in.
 
 Both subscribe to the same outer box (Cape Vincent → Eisenhower Lock),
 hard-coded near the top of each service:
@@ -123,13 +143,22 @@ detail cards.
 
 ---
 
-## ESP32-side setup
+## MatrixPortal (ESP32) setup
 
-1. Arduino IDE → Boards Manager → install **esp32** by Espressif.
+1. Arduino IDE → Boards Manager → install **esp32** by Espressif; select
+   *Adafruit MatrixPortal ESP32-S3* as the board.
 2. Library Manager → install `ESP32-HUB75-MatrixPanel-DMA` and `ArduinoJson`.
-3. Edit `WIFI_SSID` / `WIFI_PASS` at the top of the `.ino` (2.4 GHz only).
-4. Flash; read the assigned IP from the serial monitor at 115200 baud.
-5. Put that IP into `ESP32_HOST` when starting the Pi service.
+3. In the `.ino`, configure the panel: **128×64, 1/32 scan, 5-address
+   (ADDX_E)** — the 6484 is a non-standard 5-address panel; the 4-address
+   default renders scrambled.
+4. No WiFi config needed — the firmware reads newline-delimited JSON frames
+   from **USB serial** at 115200 baud.
+5. Flash, then plug the MatrixPortal's USB-C into the Pi and start the service
+   with `ESP32_SERIAL=/dev/ttyACM0`.
+
+*(The register firmware `register_esp32.ino` is the serial renderer for this
+build; the live `shipwall_esp32.ino` is the older WiFi/HTTP renderer, kept for
+the archive.)*
 
 ---
 
@@ -166,7 +195,7 @@ the lakes, SW-ish) → orange ▲; moored/anchored → grey ■.
 sunset for the reach and ramps over 30 min at dawn/dusk — bright by day, ~11%
 glow overnight. The Pi stamps the target into each frame; the ESP32 obeys.
 
-**Idle / status screens.** Boot splash, READY+IP, "WAITING / for data" if the
+**Idle / status screens.** Boot splash, a ready screen, "WAITING / for data" if the
 Pi stops pushing for 60 s, and "SEAWAY CLOSED / reopens March" during the
 winter closure (shown only when the reach is also empty).
 
@@ -285,7 +314,7 @@ Wants=network-online.target
 
 [Service]
 Environment=AISSTREAM_KEY=your_key_here
-Environment=ESP32_HOST=192.168.1.50
+Environment=ESP32_SERIAL=/dev/ttyACM0
 ExecStart=/usr/bin/python3 /home/pi/shipwall/register_service.py
 Restart=always
 RestartSec=10

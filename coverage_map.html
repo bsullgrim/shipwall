@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset=utf-8>
+<title>Ship Wall coverage map</title>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<link rel=stylesheet href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif}
+  #map{height:100vh}
+  .legend{background:#fff;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.5;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .legend b{display:block;margin-bottom:4px}
+  .sw{display:inline-block;width:10px;height:10px;margin-right:5px;border-radius:2px;vertical-align:middle}
+</style></head><body>
+<div id=map></div>
+<script>
+const BOX=[[44.1, -76.4], [45.55, -73.45]], CENTER=[44.825,-74.92500000000001], REF=[44.224,-76.086];
+const STATIONS=[{"mmsi": 3160064, "lat": 44.399705000000004, "lon": -75.97317833333334, "range_nm": 9.2, "reports": 5, "attributed": 4}, {"mmsi": 3160045, "lat": 45.30416666666667, "lon": -73.92833333333333, "range_nm": 0.2, "reports": 6, "attributed": 1}, {"mmsi": 3669962, "lat": 44.255833333333335, "lon": -76.00333333333333, "range_nm": 19.2, "reports": 4, "attributed": 36}, {"mmsi": 3160044, "lat": 45.40777833333333, "lon": -73.56722166666667, "range_nm": 8.7, "reports": 2, "attributed": 14}], DETECTIONS=[{"lat": 44.2089, "lon": -76.2125, "name": "MMSI 538006278", "code": "???"}, {"lat": 44.3007, "lon": -76.1275, "name": "MMSI 316048072", "code": "???"}, {"lat": 44.345, "lon": -76.0173, "name": "MMSI 316048073", "code": "???"}, {"lat": 44.3245, "lon": -76.1604, "name": "THOUSAND ISLANDER II", "code": "???"}, {"lat": 44.201, "lon": -76.2502, "name": "FEDERAL BALTIC", "code": "FED"}, {"lat": 44.3358, "lon": -75.9273, "name": "MMSI 316016060", "code": "???"}, {"lat": 44.3248, "lon": -76.1068, "name": "THOUSAND ISLANDER IV", "code": "???"}, {"lat": 44.1646, "lon": -76.3225, "name": "MMSI 368157390", "code": "???"}, {"lat": 44.1091, "lon": -76.3887, "name": "MMSI 368413570", "code": "???"}, {"lat": 44.3236, "lon": -76.1638, "name": "THOUSAND ISLANDER 3", "code": "???"}, {"lat": 44.2397, "lon": -76.3996, "name": "MMSI 316002588", "code": "???"}, {"lat": 44.1509, "lon": -76.3286, "name": "AMERICAN PATRIOT", "code": "ASC"}, {"lat": 44.2981, "lon": -76.2874, "name": "MMSI 316035908", "code": "???"}, {"lat": 44.2986, "lon": -76.2858, "name": "CANADIAN EMPRESS", "code": "???"}, {"lat": 44.2977, "lon": -76.1871, "name": "LE BATEAU MOUCHE II", "code": "???"}, {"lat": 44.2608, "lon": -76.0649, "name": "AMY LYNN D", "code": "???"}, {"lat": 44.3356, "lon": -75.9278, "name": "MMSI 316003612", "code": "???"}, {"lat": 44.1028, "lon": -76.3955, "name": "MMSI 538010692", "code": "???"}, {"lat": 44.2206, "lon": -76.1769, "name": "JARRETT M", "code": "???"}, {"lat": 44.2007, "lon": -76.2536, "name": "WHISTLER", "code": "???"}, {"lat": 44.165, "lon": -76.3228, "name": "MMSI 316003612", "code": "???"}, {"lat": 44.3236, "lon": -76.1638, "name": "MMSI 316048072", "code": "???"}, {"lat": 44.3245, "lon": -76.1604, "name": "MMSI 316048071", "code": "???"}, {"lat": 44.3237, "lon": -76.1611, "name": "MMSI 316002588", "code": "???"}, {"lat": 44.2434, "lon": -76.087, "name": "MMSI 368413570", "code": "???"}, {"lat": 44.2398, "lon": -76.1161, "name": "MMSI 538010692", "code": "???"}, {"lat": 44.3245, "lon": -76.1604, "name": "THOUSAND ISLANDER II", "code": "???"}, {"lat": 44.2434, "lon": -76.0869, "name": "AMERICAN PATRIOT", "code": "ASC"}, {"lat": 44.258, "lon": -76.0686, "name": "WHISTLER", "code": "???"}, {"lat": 44.3237, "lon": -76.1611, "name": "CANADIAN EMPRESS", "code": "???"}, {"lat": 44.4744, "lon": -75.7853, "name": "MMSI 316055401", "code": "???"}, {"lat": 44.3237, "lon": -76.1611, "name": "MMSI 316002588", "code": "???"}, {"lat": 45.4103, "lon": -73.712, "name": "MMSI 259033000", "code": "???"}, {"lat": 44.3249, "lon": -76.16, "name": "MMSI 316048073", "code": "???"}, {"lat": 45.503, "lon": -73.5523, "name": "MMSI 316013357", "code": "???"}, {"lat": 45.5417, "lon": -73.5124, "name": "MMSI 316040345", "code": "???"}, {"lat": 45.5067, "lon": -73.5481, "name": "MMSI 316017490", "code": "???"}, {"lat": 44.3236, "lon": -76.1638, "name": "MMSI 316048072", "code": "???"}, {"lat": 45.5464, "lon": -73.528, "name": "MMSI 636093308", "code": "???"}, {"lat": 44.3246, "lon": -76.1286, "name": "MMSI 316048071", "code": "???"}, {"lat": 44.2434, "lon": -76.0869, "name": "MMSI 368413570", "code": "???"}, {"lat": 44.2728, "lon": -76.0335, "name": "MMSI 538010692", "code": "???"}, {"lat": 45.5464, "lon": -73.528, "name": "SEAWAVE", "code": "???"}, {"lat": 45.5297, "lon": -73.5419, "name": "MMSI 316025029", "code": "???"}, {"lat": 45.5344, "lon": -73.5406, "name": "MMSI 316015140", "code": "???"}, {"lat": 44.3248, "lon": -76.1229, "name": "THOUSAND ISLANDER II", "code": "???"}, {"lat": 45.5496, "lon": -73.5265, "name": "MMSI 636016492", "code": "???"}, {"lat": 44.3249, "lon": -76.16, "name": "THOUSAND ISLANDER IV", "code": "???"}, {"lat": 45.5434, "lon": -73.5255, "name": "MMSI 316053378", "code": "???"}, {"lat": 45.5402, "lon": -73.5274, "name": "NAVARK ATLANTIS", "code": "???"}, {"lat": 44.3236, "lon": -76.1638, "name": "THOUSAND ISLANDER 3", "code": "???"}, {"lat": 45.3062, "lon": -73.9251, "name": "MMSI 316031773", "code": "???"}, {"lat": 45.4046, "lon": -73.7493, "name": "PRIME", "code": "???"}, {"lat": 45.5475, "lon": -73.5221, "name": "MMSI 316047059", "code": "???"}, {"lat": 45.503, "lon": -73.5523, "name": "AML CAVALIER MAXIM", "code": "???"}];
+const NM=1852; // metres per nautical mile
+
+const map=L.map('map').setView(CENTER,9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+
+// Area-of-interest box
+L.rectangle([[BOX[0][0],BOX[0][1]],[BOX[1][0],BOX[1][1]]],
+  {color:'#3388ff',weight:2,fill:false,dashArray:'5,5'}).addTo(map)
+  .bindPopup('Area of interest');
+
+// Reference point (Clayton)
+L.circleMarker(REF,{radius:5,color:'#222',fillColor:'#fff',fillOpacity:1,weight:2})
+  .addTo(map).bindPopup('Clayton, NY (reference)');
+
+// Received vessel detections
+DETECTIONS.forEach(d=>{
+  L.circleMarker([d.lat,d.lon],{radius:3,color:'#e6442e',fillColor:'#e6442e',
+    fillOpacity:.7,weight:0}).addTo(map)
+    .bindPopup(d.name+(d.code&&d.code!=='???'?' ('+d.code+')':''));
+});
+
+// Base stations + inferred range rings
+STATIONS.forEach(s=>{
+  if(s.range_nm>0){
+    L.circle([s.lat,s.lon],{radius:s.range_nm*NM,color:'#2e9e5b',weight:1,
+      fillColor:'#2e9e5b',fillOpacity:.08}).addTo(map);
+  }
+  L.circleMarker([s.lat,s.lon],{radius:7,color:'#1a6b3a',fillColor:'#3cdc78',
+    fillOpacity:1,weight:2}).addTo(map)
+    .bindPopup('Base station '+s.mmsi+'<br>inferred range ~'+s.range_nm+
+      ' nm<br>'+s.attributed+' detections attributed<br>'+s.reports+' reports heard');
+});
+
+const legend=L.control({position:'bottomright'});
+legend.onAdd=function(){
+  const d=L.DomUtil.create('div','legend');
+  d.innerHTML='<b>Ship Wall coverage</b>'+
+    '<span class=sw style="background:#3cdc78"></span>base station<br>'+
+    '<span class=sw style="background:#2e9e5b;opacity:.4"></span>inferred range (from detections)<br>'+
+    '<span class=sw style="background:#e6442e"></span>received vessel<br>'+
+    '<span class=sw style="background:#fff;border:1px solid #222"></span>Clayton (ref)<br>'+
+    DETECTIONS.length+' detections, '+STATIONS.length+' stations';
+  return d;
+};
+legend.addTo(map);
+
+// Fit to everything
+const pts=[[BOX[0][0],BOX[0][1]],[BOX[1][0],BOX[1][1]]]
+  .concat(STATIONS.map(s=>[s.lat,s.lon]))
+  .concat(DETECTIONS.map(d=>[d.lat,d.lon]));
+if(pts.length) map.fitBounds(pts,{padding:[30,30]});
+</script></body></html>

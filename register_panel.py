@@ -234,25 +234,61 @@ function txtMarquee(s,x,y,maxX,col,key,animT){
   for(const ch of s){ if(gx>x-GLYPH_ADV&&gx<maxX) glyph(ch,Math.round(gx),y,col); gx+=GLYPH_ADV; }
 }
 function drawDetail(s,animT){
-  // Big funnel lower-left
+  const edge=W-1;
+  // Full-width name across the very top (marquee if it overflows), with the
+  // direction glyph pinned at the far right of that row.
+  if(s.dir) dirGlyph(s.dir,edge-5,1);
+  txtMarquee(s.name,1,1,edge-6,C.name,'d-name',animT);
+
+  // Funnel justified to the top-left, just below the name row.
   const fdim=SPRITE_SIZE;
-  spriteScaled(s.op,1,H-fdim,fdim);
-  // Name across top (marquee), dir glyph fixed at right
-  if(s.dir) dirGlyph(s.dir,W-6,1);
-  txtMarquee(s.name,1,1,W-8,C.name,'d-name',animT);
-  // Right column of fields
-  const tx=fdim+5;
-  let yy=12;
-  // type + flag, with age right-aligned on the same row
+  const ftop=9;                          // first row under the name
+  spriteScaled(s.op,0,ftop,fdim);
+
+  // Fields beside the funnel (right of it, starting at the name's baseline).
+  const tx=fdim+4;
+  let yy=ftop+2;
   let l1=s.type||'VSL'; if(s.flag) l1+=' '+s.flag;
-  txt(l1,tx,yy,C.label);
-  if(s.age) rightAlign(s.age,W,yy,C.dim);
-  yy+=11;
-  if(s.length&&s.beam){ txt(s.length+'x'+s.beam+'m',tx,yy,C.value); yy+=11; }
-  if(s.draught!=null){ txt(s.draught.toFixed(1)+'m draft',tx,yy,C.value); yy+=11; }
-  if(s.navstat){ txtClip(s.navstat,tx,yy,W,C.dim); yy+=11; }
-  // destination + eta along the bottom, right of the funnel
-  if(s.dest){ let d='>'+s.dest; if(s.eta) d+=' '+s.eta; txtClip(d,tx,H-8,W,C.value); }
+  txtClip(l1,tx,yy,edge,C.label); yy+=10;
+  if(s.length&&s.beam){ txtClip(s.length+'x'+s.beam+'m',tx,yy,edge,C.value); yy+=10; }
+  if(s.age){ txtClip('seen '+s.age,tx,yy,edge,C.dim); yy+=10; }
+
+  // Below the funnel: full-width rows for the remaining fields.
+  let by=ftop+fdim+1;                    // first row under the funnel (~42)
+  let line2=[];
+  if(s.draught!=null) line2.push(s.draught.toFixed(1)+'m draft');
+  if(s.navstat) line2.push(s.navstat);
+  if(line2.length){ txtClip(line2.join('  '),1,by,edge,C.value); by+=10; }
+  if(s.dest){ let d='>'+s.dest; if(s.eta) d+=' '+s.eta; txtClip(d,1,by,edge,C.value); }
+
+  // River progress line along the very bottom: Lake Ontario (left) -> Montreal
+  // (right), with the ship's position and the home reference (Danger Island).
+  drawRiverLine(s.progress, latest.home, s.dir, H-2);
+}
+
+// Horizontal "where on the river" indicator at row `y`.
+// Lake Ontario at the left end, Montreal at the right; ship dot + home tick.
+// Kept compact (within ~3px) so it stays clear of the text rows above.
+function drawRiverLine(progress, home, dir, y){
+  const x0=2, x1=W-3, span=x1-x0;
+  cx.fillStyle=C.dim;
+  for(let x=x0;x<=x1;x++) cx.fillRect(x,y,1,1);
+  // end caps (lake / montreal)
+  cx.fillStyle='#555';
+  for(let d=-1;d<=1;d++){ cx.fillRect(x0,y+d,1,1); cx.fillRect(x1,y+d,1,1); }
+  // home reference tick (Danger Island)
+  if(home!=null){
+    const hx=Math.round(x0+home*span);
+    cx.fillStyle='#3cdc78';
+    for(let d=-1;d<=1;d++) cx.fillRect(hx,y+d,1,1);
+  }
+  // ship position dot, colored by direction
+  if(progress!=null){
+    const sx=Math.round(x0+progress*span);
+    const col=dir==='D'?C2.down:dir==='U'?C2.up:'#e6e6e6';
+    cx.fillStyle=col;
+    cx.fillRect(sx-1,y-1,3,3);
+  }
 }
 
 // ---- Mode controller --------------------------------------------------------
