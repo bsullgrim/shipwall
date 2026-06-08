@@ -82,7 +82,7 @@ def normalize(cells):
     return out
 
 
-def main(path):
+def main(path, out_path=None):
     # Read all rows, normalize, sort chronologically.
     rows = []
     with open(path, newline="") as f:
@@ -170,15 +170,28 @@ def main(path):
             r["operator"] = op
             r["code"] = _ops.operator_code(op)
 
-    w = csv.DictWriter(sys.stdout, fieldnames=OUT_COLS)
-    w.writeheader()
-    for r in out:
-        w.writerow({c: r.get(c, "") for c in OUT_COLS})
+    # Write to a file (UTF-8, correct line endings) if given, else stdout.
+    if out_path:
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=OUT_COLS)
+            w.writeheader()
+            for r in out:
+                w.writerow({c: r.get(c, "") for c in OUT_COLS})
+        print(f"wrote {len(out)} rows to {out_path}", file=sys.stderr)
+    else:
+        w = csv.DictWriter(sys.stdout, fieldnames=OUT_COLS)
+        w.writeheader()
+        for r in out:
+            w.writerow({c: r.get(c, "") for c in OUT_COLS})
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("usage: python3 clean_register.py register.csv > register_clean.csv",
-              file=sys.stderr)
-        sys.exit(1)
-    main(sys.argv[1])
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Dedupe/clean a register.csv (drop-in replacement output).")
+    ap.add_argument("input", help="raw register.csv to clean")
+    ap.add_argument("-o", "--output",
+                    help="write here (default: print to stdout). On Windows "
+                         "prefer this over '> file' to avoid UTF-16/BOM issues.")
+    args = ap.parse_args()
+    main(args.input, args.output)

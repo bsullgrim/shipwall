@@ -1,9 +1,9 @@
 # St. Lawrence Ship Wall
 
 A FlightWall-style LED display for ship traffic on the upper St. Lawrence
-Seaway, watching the reach from **Cape Vincent down to the Eisenhower Lock**
-near Massena. A Python service subscribes to live AIS, identifies each vessel's
-operator (and thus its funnel livery), and pushes compact frames to an
+Seaway, watching the reach from **Cape Vincent down to the Snell/Beauharnois
+lock** above Montreal. A Python service subscribes to live AIS, identifies each
+vessel's operator (and thus its funnel livery), and pushes compact frames to an
 ESP32-driven 128×64 LED matrix. The ESP32 is a stateless renderer; all the
 logic lives on the Pi side.
 
@@ -50,6 +50,25 @@ Register variant:
 - `register_panel.py` — browser stand-in with BOARD + DETAIL modes.
 - `register_simulate.py` — synthetic register for the panel, no AIS key needed.
 - `register_esp32.ino` — firmware renderer *(planned; mock is the reference)*.
+
+Data & diagnostics:
+- `mmsi_database.json` — persistent MMSI → identity store the service grows
+  from static AIS messages (name/operator/type/dimensions). Lets known vessels
+  be identified the moment their position arrives, instead of appearing as
+  ghosts. Set `MMSI_DB=mmsi_database.json` to enable.
+- `seed_mmsi_db.py` — bootstrap that database from an existing register CSV, so
+  it starts populated with everything seen so far (operators re-resolved via
+  current rules).
+- `clean_register.py` — dedupe a messy register: drop restart-duplicate spam,
+  prune sightings outside the box, and re-resolve operators against current
+  rules. Outputs a drop-in `register.csv` (`-o file` to write directly).
+- `operator_worklist.py` — list named-but-UNKNOWN vessels and assign
+  MMSI → operator mappings (validated against the sprite-backed set).
+- `passage_stats.py` — LAN web page (port 8090) showing which ships have passed
+  Danger Island, how often, and recent crossings (`--demo` for sample data).
+- `coverage_probe.py` — listen for AIS base stations and render
+  `coverage_map.html` (Leaflet) showing inferred receiver coverage vs. the
+  vessels actually heard.
 
 ---
 
@@ -133,13 +152,13 @@ from the USB serial port.
    serial device is usually `/dev/ttyACM0` for the MatrixPortal; check with
    `ls /dev/ttyACM*` after plugging it in.
 
-Both subscribe to the same outer box (Cape Vincent → Eisenhower Lock),
+Both subscribe to the same outer box (Cape Vincent → Snell/Beauharnois lock),
 hard-coded near the top of each service:
 ```python
-BOUNDING_BOX = [[[44.10, -76.40], [45.02, -74.78]]]
+BOUNDING_BOX = [[[44.10, -76.40], [45.3237, -73.9132]]]
 ```
-The live service also has an inner box (Chippewa Bay → Oak Point) feeding its
-detail cards.
+The box stops at the lock to exclude Montreal harbor traffic. The live service
+also has an inner box (the American Narrows) feeding its detail cards.
 
 ---
 
@@ -182,8 +201,11 @@ ago it was seen. Scrolls vertically when the list overflows. Most-recent first.
 
 *DETAIL.* One ship at a time, full screen: the large 32×32 funnel plus the rich
 AIS fields — type + flag, dimensions (e.g. `225x24m`), draught, navigation
-status, destination + ETA, last-seen age. Cycles through the register, then
-returns to the board. Missing fields are simply omitted.
+status, destination + ETA, last-seen age — and a **river progress line** along
+the bottom showing where the ship is between Lake Ontario and the lock, with
+Danger Island marked as a fixed reference. Only *named* ships get a detail card;
+unidentified "ghost" vessels stay on the board but don't get a solo card. Cycles
+through the named ships, then returns to the board. Missing fields are omitted.
 
 ### Shared display behavior
 
@@ -269,23 +291,38 @@ AISSTREAM_KEY=... ESP32_HOST=localhost:8080 python3 register_service.py
 Both panels serve on port 8080, so run only one at a time. The register page
 title reads "recent-sightings register"; the live page reads "live preview".
 
-### Unattended logging
+### Unattended logging & persistence
 
-Both services log every vessel the feed delivers to a CSV (first seen, and again
-when its name/operator resolves — deduped so it stays compact over long runs):
+The register service can maintain several persistent files (all optional, off
+unless their env var is set; the startup banner shows which are active):
 
 ```bash
-SHIPWALL_LOG=ships.csv   python3 shipwall_service.py    # live
-REGISTER_LOG=register.csv python3 register_service.py    # register
+REGISTER_LOG=register.csv \
+PASSAGE_LOG=passages.csv \
+MMSI_DB=mmsi_database.json \
+AISSTREAM_KEY=... ESP32_SERIAL=/dev/ttyACM0 python3 register_service.py
 ```
 
-The register CSV includes the resolved operator/code/flag per vessel, making it
-the best seed for building `mmsi_to_operator.json`: filter to `operator=UNKNOWN`,
-read off the names + MMSIs, and map them. Both CSVs append across restarts.
+- **`REGISTER_LOG`** — every vessel the feed delivers (first seen, and again
+  when its name/operator resolves; deduped, and the dedup persists across
+  restarts so it stays compact). The register CSV includes the resolved
+  operator/code/flag, making it the best seed for `mmsi_to_operator.json` and
+  for `seed_mmsi_db.py`. On restart the service also warm-starts the display
+  from this file, so the board isn't empty while waiting for ships to re-report.
+- **`PASSAGE_LOG`** — vessels inferred to have transited Danger Island. There's
+  no AIS coverage at the island itself, so a passage is inferred when a ship's
+  position crosses the home point between two sightings (seen above, later
+  below = downbound, and vice versa). View the tally at `passage_stats.py`.
+- **`MMSI_DB`** — the persistent identity database (see the file map). Grows as
+  static messages resolve vessels; pre-fills known MMSIs on sight. Bootstrap it
+  from an existing register with `python3 seed_mmsi_db.py register.csv`.
 
-Both mock panels also auto-save a 6×-upscaled PNG to `captures/` the first time
-a vessel appears (deduped), so you can review what came through without watching
-live. Requires the browser tab to stay open; `captures/` is gitignored.
+Use absolute paths if the service and `passage_stats.py` run from different
+directories. The live variant logs vessels with `SHIPWALL_LOG=ships.csv`.
+
+The register mock can also auto-save a PNG to `captures/` the first time a
+vessel appears, but this is **off by default** (set `CAPTURE=true` in
+`register_panel.py` to re-enable). `captures/` is gitignored.
 
 ---
 
@@ -295,7 +332,8 @@ The AISStream key is read from the environment or a gitignored `.env`:
 ```bash
 cp .env.example .env     # add your real key here
 ```
-`.gitignore` excludes `.env`, `*.key`, `ships*.csv`, `register*.csv`,
+`.gitignore` excludes `.env`, `*.key`, the runtime data files (`ships*.csv`,
+`register*.csv`, `passages*.csv`, `mmsi_database.json`, `coverage_map*.html`),
 `captures/`, and source funnel photos. A real environment variable overrides the
 file, so a systemd unit works without a `.env`. If a key lands in a commit,
 **rotate it** at aisstream.io — that's faster and safer than scrubbing history.
@@ -315,6 +353,9 @@ Wants=network-online.target
 [Service]
 Environment=AISSTREAM_KEY=your_key_here
 Environment=ESP32_SERIAL=/dev/ttyACM0
+Environment=REGISTER_LOG=/home/pi/shipwall/register.csv
+Environment=PASSAGE_LOG=/home/pi/shipwall/passages.csv
+Environment=MMSI_DB=/home/pi/shipwall/mmsi_database.json
 ExecStart=/usr/bin/python3 /home/pi/shipwall/register_service.py
 Restart=always
 RestartSec=10

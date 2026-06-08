@@ -273,7 +273,7 @@ def save_mmsi_db():
     try:
         tmp = MMSI_DB_PATH + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(mmsi_db, f, separators=(",", ":"))
+            json.dump(mmsi_db, f, indent=2, sort_keys=True)
         os.replace(tmp, MMSI_DB_PATH)
     except Exception as e:
         print(f"[mmsidb] could not save {MMSI_DB_PATH}: {e}")
@@ -719,6 +719,9 @@ if __name__ == "__main__":
         print(f"  Display:   serial {ESP32_SERIAL} @ {SERIAL_BAUD}")
     else:
         print(f"  Display:   HTTP {ESP32_URL}")
+    print(f"  Register log: {VESSEL_LOG or 'OFF (set REGISTER_LOG)'}")
+    print(f"  Passage log:  {PASSAGE_LOG or 'OFF (set PASSAGE_LOG)'}")
+    print(f"  MMSI DB:      {MMSI_DB_PATH or 'OFF (set MMSI_DB)'}")
     _seed_log_from_existing()
     load_mmsi_db()
     _seed_vessels_from_register()
