@@ -249,8 +249,11 @@ const STATIONS=%STATIONS%, DETECTIONS=%DETECTIONS%;
 const NM=1852; // metres per nautical mile
 
 const map=L.map('map').setView(CENTER,9);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+// CARTO basemap (free, CORS/local-friendly, no Referer requirement like
+// OSM's main tile server; dark theme suits the panel colors). Subdomains a-d.
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  {maxZoom:19, subdomains:'abcd',
+   attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
 
 // Area-of-interest box
 L.rectangle([[BOX[0][0],BOX[0][1]],[BOX[1][0],BOX[1][1]]],

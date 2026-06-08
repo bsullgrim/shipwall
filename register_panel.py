@@ -182,17 +182,27 @@ function dirGlyph(dir,x,y){
 
 // ---- BOARD mode: scrolling departure-board list ----------------------------
 const ROW_H=10;                       // px per ship row
+const BOARD_SCROLL_SPEED=8;           // px/sec
+const BOARD_SCROLL_PAUSE=2000;        // ms top/bottom hold
+
+// How long one full board cycle takes (ms): if the list fits, a fixed dwell;
+// if it overflows, long enough to scroll down and back with pauses.
+function boardCycleMs(n){
+  const totalH=n*ROW_H;
+  if(totalH<=H) return 8000;          // fits: fixed dwell
+  const travel=totalH-H;
+  const scrollMs=travel/BOARD_SCROLL_SPEED*1000;
+  return BOARD_SCROLL_PAUSE+scrollMs+BOARD_SCROLL_PAUSE+scrollMs;
+}
+
 function drawBoard(ships, animT){
   const n=ships.length;
   if(n===0){ centered('NO SHIPS',H/2-8,C.accent); centered('in window',H/2+2,C.dim); return; }
-  // Header strip
-  const visibleRows=Math.floor(H/ROW_H);
-  // Vertical scroll if more ships than fit. Smooth wrap with pauses.
   let scroll=0;
   const totalH=n*ROW_H;
   if(totalH>H){
-    const SPEED=8;                    // px/sec
-    const PAUSE=2000;                 // ms top/bottom hold
+    const SPEED=BOARD_SCROLL_SPEED;
+    const PAUSE=BOARD_SCROLL_PAUSE;
     const travel=totalH-H;
     const scrollMs=travel/SPEED*1000;
     const cycle=PAUSE+scrollMs+PAUSE+scrollMs;  // hold,down,hold,up
@@ -292,8 +302,9 @@ function drawRiverLine(progress, home, dir, y){
 }
 
 // ---- Mode controller --------------------------------------------------------
-// BOARD for BOARD_MS, then DETAIL cycling DETAIL_MS each, then back to BOARD.
-const BOARD_MS=12000, DETAIL_MS=5000;
+// BOARD shown long enough to complete a full scroll, then DETAIL cycles through
+// the NAMED ships (ghosts stay on the board but get no solo card), then back.
+const DETAIL_MS=5000;
 let lastFrame=0, animT=0, latest=_blank();
 function _blank(){return {ts:0,bright:128,closed:false,hours:18,ships:[]};}
 
@@ -308,15 +319,17 @@ function render(f,animT){
     centered('SEAWAY',H/2-16,C.accent); centered('CLOSED',H/2-4,C.name);
     centered('reopens March',H/2+8,C.dim); cv.style.opacity=1; return;
   }
-  // Mode timing
   const n=ships.length;
-  const cycle=BOARD_MS + (n>0?n*DETAIL_MS:0);
+  // Only named ships get detail cards; ghosts (MMSI-only) stay on the board.
+  const named=ships.filter(s=>s.name && s.name.indexOf('MMSI ')!==0);
+  const boardMs=boardCycleMs(n);
+  const cycle=boardMs + named.length*DETAIL_MS;
   const p=animT%cycle;
-  if(n===0 || p<BOARD_MS){
+  if(n===0 || named.length===0 || p<boardMs){
     drawBoard(ships,animT);
   }else{
-    const idx=Math.floor((p-BOARD_MS)/DETAIL_MS)%n;
-    drawDetail(ships[idx],animT);
+    const idx=Math.floor((p-boardMs)/DETAIL_MS)%named.length;
+    drawDetail(named[idx],animT);
   }
   cv.style.opacity=(0.25+0.75*(f.bright/255)).toFixed(2);
 }
@@ -331,10 +344,11 @@ async function poll(){
       f.bright+'/255  |  '+(f.closed?'CLOSED':'in season');
   }catch(e){}
 }
-function frame(t){ animT=t; render(latest,animT); maybeCapture(latest); requestAnimationFrame(frame); }
+function frame(t){ animT=t; render(latest,animT); if(CAPTURE) maybeCapture(latest); requestAnimationFrame(frame); }
 
-// Capture a screenshot the first time a vessel appears in the register.
-// Deduped by MMSI so each ship is grabbed once per visit, not every frame.
+// First-appearance screenshot capture. OFF by default; set CAPTURE=true to
+// re-enable (saves a PNG to captures/ the first time each vessel appears).
+const CAPTURE=false;
 let capturedMMSI = new Set();
 function maybeCapture(f){
   const ships=f.ships||[];

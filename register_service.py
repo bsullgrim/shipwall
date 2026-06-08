@@ -21,6 +21,8 @@ with the live version; only the retention model and frame shape differ.
 """
 
 import asyncio
+import csv as _csv
+import datetime as _dt
 import json
 import os
 import sys
@@ -75,6 +77,21 @@ DEBUG = os.environ.get("SHIPWALL_DEBUG", "") not in ("", "0", "false", "False")
 # data for building the MMSI->operator table, and a coverage record. Appends
 # across restarts.
 VESSEL_LOG = os.environ.get("REGISTER_LOG", "").strip()
+
+# Set PASSAGE_LOG=path.csv to log vessels that pass Danger Island. We can't
+# detect ships at Danger Island directly (no coverage there), so we infer a
+# passage when a ship's river-progress crosses the home point between two
+# sightings -- seen above, later seen below (or vice versa) means it transited
+# past us. Direction comes from which way it crossed. Appends across restarts.
+PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "").strip()
+
+# Set MMSI_DB=path.json to maintain a persistent MMSI -> identity database.
+# Every time a static AIS message resolves a vessel, its name/operator/type/
+# dimensions/flag are upserted (freshest wins). On startup the DB is loaded and
+# used to pre-fill known MMSIs, so a vessel we've seen before is identified the
+# moment its position arrives -- no waiting for this session's static message,
+# and far fewer "ghost" entries over time.
+MMSI_DB_PATH = os.environ.get("MMSI_DB", "").strip()
 
 # --- Ship type + nav status + country (mirrors the live service) -------------
 SHIP_TYPES = {
@@ -146,6 +163,65 @@ def river_progress(lat, lon):
 HOME_PROGRESS = river_progress(HOME_POINT[0], HOME_POINT[1])
 
 
+# --- Passage detection (crossings of Danger Island) --------------------------
+# Track each MMSI's last river-progress + time; when a new sighting lands on the
+# opposite side of HOME_PROGRESS, the ship transited past us.
+_last_progress = {}            # mmsi -> (progress, observed_time)
+_passage_header_written = False
+
+
+def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after):
+    global _passage_header_written
+    # Estimate the pass time by linear interpolation to the home crossing.
+    span = (p_after - p_before)
+    if span != 0:
+        frac = (HOME_PROGRESS - p_before) / span
+        t_pass = t_before + frac * (t_after - t_before)
+    else:
+        t_pass = (t_before + t_after) / 2
+    row = {
+        "pass_time": _dt.datetime.fromtimestamp(t_pass).isoformat(timespec="seconds"),
+        "mmsi": mmsi,
+        "name": name or f"MMSI {mmsi}",
+        "operator": op,
+        "direction": direction,          # "downbound" / "upbound"
+        "seen_before": _dt.datetime.fromtimestamp(t_before).isoformat(timespec="seconds"),
+        "seen_after": _dt.datetime.fromtimestamp(t_after).isoformat(timespec="seconds"),
+        "gap_min": round((t_after - t_before) / 60.0, 1),
+    }
+    try:
+        write_header = not _passage_header_written and not os.path.exists(PASSAGE_LOG)
+        with open(PASSAGE_LOG, "a", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+        _passage_header_written = True
+        print(f"[passage] {row['name']} {direction} "
+              f"(gap {row['gap_min']}m)")
+    except Exception as e:
+        print(f"[passage] could not write {PASSAGE_LOG}: {e}")
+
+
+def check_passage(mmsi, lat, lon, observed, name, op):
+    """Detect a crossing of HOME_PROGRESS between consecutive sightings."""
+    if not PASSAGE_LOG or HOME_PROGRESS is None:
+        return
+    p = river_progress(lat, lon)
+    if p is None:
+        return
+    prev = _last_progress.get(mmsi)
+    _last_progress[mmsi] = (p, observed)
+    if prev is None:
+        return
+    p_prev, t_prev = prev
+    # Crossed the home point if the two sightings straddle HOME_PROGRESS.
+    if (p_prev < HOME_PROGRESS <= p) :
+        _log_passage(mmsi, name, op, "downbound", t_prev, p_prev, observed, p)
+    elif (p_prev > HOME_PROGRESS >= p):
+        _log_passage(mmsi, name, op, "upbound", t_prev, p_prev, observed, p)
+
+
 def bound_dir(cog, sog):
     """NE course = downbound (D, toward sea), SW = upbound (U), slow = moored."""
     if (sog or 0) < MIN_SPEED_KTS:
@@ -157,11 +233,116 @@ def bound_dir(cog, sog):
 
 
 # --- Vessel register ----------------------------------------------------------
-# mmsi -> merged dict; "last" is the most recent sighting time.
+# mmsi -> merged dict; "last" is the most recent sighting time (AIS observation
+# time when available, else local receive time).
+#
+# NOTE: we subscribe to PositionReport + ShipStaticData only -- these are the
+# Class A messages broadcast by big commercial ships (lakers, salties), which
+# is exactly the traffic this wall is about. Smaller craft (some tugs, pleasure
+# boats) transmit Class B (Standard/ExtendedClassBPositionReport), which we
+# deliberately do NOT request, to keep the register to big ships.
 vessels = {}
 
 
-def update_position(mmsi, msg):
+# --- Persistent MMSI identity database ---------------------------------------
+# mmsi (str) -> {name, operator, code, flag, type, type_code, length, beam,
+#               updated}. Grows as static AIS messages resolve vessels; used to
+# identify known MMSIs on sight in future sessions.
+mmsi_db = {}
+
+
+def load_mmsi_db():
+    if not MMSI_DB_PATH or not os.path.exists(MMSI_DB_PATH):
+        return
+    try:
+        with open(MMSI_DB_PATH) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            mmsi_db.update(data)
+            print(f"[mmsidb] loaded {len(mmsi_db)} known vessels from {MMSI_DB_PATH}")
+    except Exception as e:
+        print(f"[mmsidb] could not load {MMSI_DB_PATH}: {e}")
+
+
+_mmsi_db_dirty = False
+
+
+def save_mmsi_db():
+    if not MMSI_DB_PATH or not _mmsi_db_dirty:
+        return
+    try:
+        tmp = MMSI_DB_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(mmsi_db, f, separators=(",", ":"))
+        os.replace(tmp, MMSI_DB_PATH)
+    except Exception as e:
+        print(f"[mmsidb] could not save {MMSI_DB_PATH}: {e}")
+
+
+def db_upsert(mmsi, v, op, code, flag):
+    """Record/refresh a vessel's identity in the persistent DB (freshest wins).
+    Only stores stable identity fields -- not position or destination."""
+    global _mmsi_db_dirty
+    if not MMSI_DB_PATH:
+        return
+    name = (v.get("name") or "").strip()
+    if not name:                       # only store once we actually know who it is
+        return
+    key = str(mmsi)
+    rec = {
+        "name": name,
+        "operator": op,
+        "code": code,
+        "flag": flag or "",
+        "type": v.get("type", ""),
+        "type_code": v.get("type_code"),
+        "length": v.get("length"),
+        "beam": v.get("beam"),
+        "updated": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+    if mmsi_db.get(key) != rec:
+        # compare ignoring the timestamp so we don't churn on identical data
+        prev = dict(mmsi_db.get(key, {})); prev.pop("updated", None)
+        cmp = dict(rec); cmp.pop("updated", None)
+        if prev != cmp:
+            mmsi_db[key] = rec
+            _mmsi_db_dirty = True
+
+
+def db_prefill(mmsi):
+    """If we already know this MMSI from a past session, seed its identity into
+    the live vessel record so it shows up named immediately (no ghost)."""
+    rec = mmsi_db.get(str(mmsi))
+    if not rec:
+        return
+    v = vessels.setdefault(mmsi, {"mmsi": mmsi})
+    v.setdefault("name", rec.get("name"))
+    v.setdefault("type", rec.get("type") or "VSL")
+    if rec.get("type_code") is not None:
+        v.setdefault("type_code", rec.get("type_code"))
+    if rec.get("length"):
+        v.setdefault("length", rec["length"])
+    if rec.get("beam"):
+        v.setdefault("beam", rec["beam"])
+
+
+def parse_time_utc(meta):
+    """AIS observation time from message metadata ('time_utc'), as an epoch
+    float; falls back to local receive time if absent/unparseable. The field
+    looks like '2022-12-29 18:22:32.318353 +0000 UTC'."""
+    s = (meta or {}).get("time_utc")
+    if not s:
+        return time.time()
+    try:
+        # Trim the trailing ' UTC' label and parse the offset-aware timestamp.
+        s2 = s.replace(" UTC", "").strip()
+        # Python wants 6-digit microseconds and +0000 (no colon) works with %z.
+        return _dt.datetime.strptime(s2, "%Y-%m-%d %H:%M:%S.%f %z").timestamp()
+    except Exception:
+        return time.time()
+
+
+def update_position(mmsi, msg, observed):
     v = vessels.setdefault(mmsi, {"mmsi": mmsi})
     v["lat"] = msg.get("Latitude")
     v["lon"] = msg.get("Longitude")
@@ -169,10 +350,10 @@ def update_position(mmsi, msg):
     v["cog"] = msg.get("Cog")
     v["hdg"] = msg.get("TrueHeading")
     v["navstat"] = msg.get("NavigationalStatus")
-    v["last"] = time.time()
+    v["last"] = observed
 
 
-def update_static(mmsi, msg):
+def update_static(mmsi, msg, observed):
     v = vessels.setdefault(mmsi, {"mmsi": mmsi})
     name = (msg.get("Name") or "").strip()
     if name:
@@ -200,7 +381,7 @@ def update_static(mmsi, msg):
     hr, mn = eta.get("Hour"), eta.get("Minute")
     if day and hr is not None and hr < 24 and mn is not None and mn < 60:
         v["eta"] = f"{day:02d} {hr:02d}:{mn:02d}"
-    v["last"] = time.time()
+    v["last"] = observed
 
 
 def prune():
@@ -234,11 +415,104 @@ def age_string(secs):
 
 
 # --- Long-run CSV logging (REGISTER_LOG=path.csv) ----------------------------
-import csv as _csv
-import datetime as _dt
-
 _logged = {}                  # mmsi -> last-logged (name, op) signature
 _log_header_written = False
+
+
+def _seed_log_from_existing():
+    """Pre-load _logged from an existing REGISTER_LOG so vessels already
+    recorded in a previous run aren't re-logged as 'first_seen' after a
+    restart. Uses the most recent (name, operator) seen per MMSI in the file."""
+    global _log_header_written
+    if not VESSEL_LOG or not os.path.exists(VESSEL_LOG):
+        return
+    try:
+        with open(VESSEL_LOG, newline="") as f:
+            n = 0
+            for row in _csv.DictReader(f):
+                m = row.get("mmsi")
+                if not m:
+                    continue
+                try:
+                    m = int(m)
+                except ValueError:
+                    continue
+                _logged[m] = (row.get("name", "") or "", row.get("operator", "") or "")
+                n += 1
+        _log_header_written = True   # file exists, header already present
+        if n:
+            print(f"[log] seeded dedup from {VESSEL_LOG}: "
+                  f"{len(_logged)} known vessels (won't re-log on restart)")
+    except Exception as e:
+        print(f"[log] could not seed from {VESSEL_LOG}: {e}")
+
+
+def _parse_iso(ts):
+    """Parse a logged ISO timestamp to epoch seconds; None on failure."""
+    try:
+        return _dt.datetime.fromisoformat(ts).timestamp()
+    except Exception:
+        return None
+
+
+def _seed_vessels_from_register():
+    """Warm-start the display: pre-load the `vessels` dict from REGISTER_LOG so
+    the panel shows the recent register immediately after a restart instead of
+    waiting for ships to re-report. Uses each vessel's most recent logged row;
+    positions are last-known (possibly stale) but the age stamp tells the truth,
+    and prune() drops anything already past the retention window. Live AIS then
+    refreshes positions as ships re-report."""
+    if not VESSEL_LOG or not os.path.exists(VESSEL_LOG):
+        return
+    latest = {}                   # mmsi -> (epoch, row) keeping the newest row
+    try:
+        with open(VESSEL_LOG, newline="") as f:
+            for row in _csv.DictReader(f):
+                m = row.get("mmsi")
+                if not m or not m.isdigit():
+                    continue
+                m = int(m)
+                t = _parse_iso(row.get("timestamp", "")) or 0
+                if m not in latest or t >= latest[m][0]:
+                    latest[m] = (t, row)
+    except Exception as e:
+        print(f"[seed] could not read {VESSEL_LOG}: {e}")
+        return
+
+    def num(s):
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return None
+
+    seeded = 0
+    for m, (t, row) in latest.items():
+        if not t:
+            continue
+        v = {"mmsi": m, "last": t}
+        name = (row.get("name") or "").strip()
+        if name:
+            v["name"] = name
+        if row.get("type"):
+            v["type"] = row["type"]
+        tc = row.get("type_code")
+        if tc and tc.lstrip("-").isdigit():
+            v["type_code"] = int(tc)
+        for k_csv, k_v in (("length", "length"), ("beam", "beam")):
+            val = num(row.get(k_csv))
+            if val:
+                v[k_v] = val
+        lat, lon = num(row.get("lat")), num(row.get("lon"))
+        if lat is not None and lon is not None:
+            v["lat"], v["lon"] = lat, lon
+        if row.get("dest"):
+            v["dest"] = row["dest"]
+        vessels[m] = v
+        seeded += 1
+    prune()                       # drop any already older than the window
+    if seeded:
+        print(f"[seed] warm-started display with {len(vessels)} recent vessels "
+              f"from {VESSEL_LOG} (positions may be stale until they re-report)")
 
 
 def log_vessel(mmsi, v, op, code, flag):
@@ -362,6 +636,7 @@ async def pusher(session):
         await asyncio.sleep(PUSH_INTERVAL)
         frame = build_frame()
         n = len(frame["ships"])
+        save_mmsi_db()             # persist any new identities (no-op if unchanged)
         if ESP32_SERIAL:
             # Newline-delimited JSON: one frame per line, '\n'-terminated.
             try:
@@ -392,11 +667,29 @@ def handle_message(msg):
     mmsi = meta.get("MMSI")
     if mmsi is None:
         return
+    observed = parse_time_utc(meta)        # AIS observation time, not receive time
     body = msg.get("Message", {})
     if mtype == "PositionReport":
-        update_position(mmsi, body.get("PositionReport", {}))
+        pr = body.get("PositionReport", {})
+        # If we know this MMSI from a past session, seed its identity now so it
+        # shows up named immediately instead of as a ghost.
+        if MMSI_DB_PATH and str(mmsi) in mmsi_db and not vessels.get(mmsi, {}).get("name"):
+            db_prefill(mmsi)
+        update_position(mmsi, pr, observed)
+        # Passage check on every position report (not just at frame build, so
+        # we don't miss a crossing between the 10s frame pushes).
+        if PASSAGE_LOG:
+            v = vessels.get(mmsi, {})
+            op = operator_for(mmsi, v.get("name"))
+            check_passage(mmsi, pr.get("Latitude"), pr.get("Longitude"),
+                          observed, v.get("name"), op)
     elif mtype == "ShipStaticData":
-        update_static(mmsi, body.get("ShipStaticData", {}))
+        update_static(mmsi, body.get("ShipStaticData", {}), observed)
+        # Record the resolved identity in the persistent DB (freshest wins).
+        if MMSI_DB_PATH:
+            v = vessels.get(mmsi, {})
+            op = operator_for(mmsi, v.get("name"))
+            db_upsert(mmsi, v, op, operator_code(op), country_for(mmsi))
 
 
 async def subscribe():
@@ -426,4 +719,7 @@ if __name__ == "__main__":
         print(f"  Display:   serial {ESP32_SERIAL} @ {SERIAL_BAUD}")
     else:
         print(f"  Display:   HTTP {ESP32_URL}")
+    _seed_log_from_existing()
+    load_mmsi_db()
+    _seed_vessels_from_register()
     asyncio.run(subscribe())

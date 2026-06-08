@@ -57,6 +57,9 @@ NAME_PREFIX_RULES = [
     ("STEWART",  "INTERLAKE"), # Interlake Steamship
     ("MESABI",   "INTERLAKE"),
     ("PAUL",     "INTERLAKE"), # Paul R. Tregurtha
+    # --- learned from observed sightings (only where they map to a sprite) ---
+    ("WHITEFISH","ALGOMA"),    # Whitefish Bay -- Algoma Equinox-class
+    ("MCASPHALT","MCASPHALT"), # "MCASPHALT ADVANTAGE" -- name carries the operator
 ]
 
 # Fleets whose ship names have NO clean prefix, so name-matching can't identify
