@@ -28,6 +28,14 @@ OPERATOR_CODES = {
     "INTERLAKE": "INT", "LOWERLAKES": "LLT", "DESGAGNES": "DSG",
     "ANDRIE": "AND", "CLIFFS": "CLF", "G3": "G3", "GLF": "GLF",
     "HOLCIM": "HOL", "MCASPHALT": "MCA", "NACC": "NAC", "VTB": "VTB",
+    # Added from the ship-log analysis, ranked by how often they're seen.
+    # These keys resolve via ship_to_operator.json now; sprites are TODO
+    # (build them in this priority order -- see ship_to_operator.json header).
+    "MCKEIL": "MCK", "WAGENBORG": "WGB", "POLSTEAM": "POL",
+    "CANFORNAV": "CFN", "NMBULGARE": "NMB", "SPLIETHOFF": "SPL",
+    "BRIESE": "BRS", "CCG": "CCG", "GRANATH": "GRA", "CARISBROOKE": "CAR",
+    "TBMARINE": "TBM", "COASTAL": "CST", "GROUPEOCEAN": "OCN",
+    "NEAS": "NEA", "BIGLIFT": "BLF", "RCN": "RCN",
     "UNKNOWN": "???",
 }
 
@@ -58,7 +66,6 @@ NAME_PREFIX_RULES = [
     ("MESABI",   "INTERLAKE"),
     ("PAUL",     "INTERLAKE"), # Paul R. Tregurtha
     # --- learned from observed sightings (only where they map to a sprite) ---
-    ("WHITEFISH","ALGOMA"),    # Whitefish Bay -- Algoma Equinox-class
     ("MCASPHALT","MCASPHALT"), # "MCASPHALT ADVANTAGE" -- name carries the operator
 ]
 
@@ -88,6 +95,25 @@ def _load_mmsi_table():
 _MMSI_TABLE = _load_mmsi_table()
 
 
+# Exact ship-name -> operator key, built from a multi-year personal ship log
+# (see ship_to_operator.json). This is the most reliable signal we have for the
+# operators that have no usable name prefix -- the name was matched to a fleet
+# by a human who watched it pass. Names are uppercased, whitespace-collapsed.
+_SHIP_NAME_PATH = os.path.join(_HERE, "ship_to_operator.json")
+
+
+def _load_ship_names():
+    try:
+        with open(_SHIP_NAME_PATH, "r") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+    return {" ".join(k.upper().split()): v for k, v in raw.items()}
+
+
+_SHIP_NAMES = _load_ship_names()
+
+
 # Operators whose family name appears anywhere in the vessel name (not just as
 # a prefix). Matched by substring after the prefix rules miss.
 NAME_CONTAINS_RULES = [
@@ -100,7 +126,10 @@ def operator_for(mmsi, name):
     if mmsi in _MMSI_TABLE:
         return _MMSI_TABLE[mmsi]
     if name:
-        upper = name.upper().strip()
+        upper = " ".join(name.upper().split())
+        # Exact name match from the ship log (most reliable for no-prefix fleets).
+        if upper in _SHIP_NAMES:
+            return _SHIP_NAMES[upper]
         for prefix, key in NAME_PREFIX_RULES:
             if upper.startswith(prefix):
                 return key

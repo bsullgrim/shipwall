@@ -1,0 +1,369 @@
+{
+  "generated": "2026-06-08T18:42:18",
+  "totals": {
+    "sightings": 3800,
+    "distinct_ships": 731,
+    "distinct_fleets": 283,
+    "one_timers": 330,
+    "span": "2016–2026"
+  },
+  "exotics": [
+    {
+      "name": "Nao Santa Maria",
+      "category": "Tall ship",
+      "comment": "Brockville Tall ships - 2 masts - 28m",
+      "year": 2022
+    },
+    {
+      "name": "Empire Sandy",
+      "category": "Tall ship",
+      "comment": "Brockville Tall ships - 3 masts - 43m",
+      "year": 2022
+    },
+    {
+      "name": "Lettie G Howard",
+      "category": "Tall ship",
+      "comment": "From Brockport Tall Ships",
+      "year": 2025
+    },
+    {
+      "name": "Pride of Balitimore 2",
+      "category": "Tall ship",
+      "comment": "From Brockport Tall Ships",
+      "year": 2025
+    },
+    {
+      "name": "Maxima",
+      "category": "Sail",
+      "comment": "Bright red front steer",
+      "year": 2022
+    },
+    {
+      "name": "Ernestina Morrissey",
+      "category": "Sail",
+      "comment": "Sailing vessel",
+      "year": 2025
+    },
+    {
+      "name": "Fryderyk Chopin",
+      "category": "Sail",
+      "comment": "Martinique - 2 Masted Schooner",
+      "year": 2026
+    },
+    {
+      "name": "Sea Cloud II",
+      "category": "Sail",
+      "comment": "Charleston, Nevis - Passenger - Sailing",
+      "year": 2026
+    },
+    {
+      "name": "Sea Dream II",
+      "category": "Sail",
+      "comment": "Charleston, Nevis - Passenger - Sailing",
+      "year": 2026
+    },
+    {
+      "name": "Mamilossa",
+      "category": "Coast Guard",
+      "comment": "Coast Guard Hovercraft",
+      "year": 2022
+    },
+    {
+      "name": "Judy Lamarsh",
+      "category": "Icebreaker",
+      "comment": "icebreaker / firefighter",
+      "year": 2022
+    },
+    {
+      "name": "New Secret",
+      "category": "Yacht",
+      "comment": "Private Yacht - big",
+      "year": 2022
+    },
+    {
+      "name": "Aujaq",
+      "category": "Yacht",
+      "comment": "had a yacht on deck",
+      "year": 2023
+    },
+    {
+      "name": "Sivumut",
+      "category": "Yacht",
+      "comment": "Two Yachts onboard - was BBC Arizona",
+      "year": 2025
+    },
+    {
+      "name": "Mick",
+      "category": "Yacht",
+      "comment": "with Yachts",
+      "year": 2025
+    },
+    {
+      "name": "Rising Sun",
+      "category": "Yacht",
+      "comment": "Phillipsburg - David Geffen Yacht",
+      "year": 2026
+    },
+    {
+      "name": "Chopi Chopi",
+      "category": "Yacht",
+      "comment": "Phillipsburg - Yacht",
+      "year": 2026
+    },
+    {
+      "name": "Renaissance",
+      "category": "Yacht",
+      "comment": "Bassaterre - St. Kitts - Yacht",
+      "year": 2026
+    },
+    {
+      "name": "Pi",
+      "category": "Yacht",
+      "comment": "Castries, St. Lucia - Yacht",
+      "year": 2026
+    },
+    {
+      "name": "Emerald Sakara",
+      "category": "Yacht",
+      "comment": "Les Saintes, Guadeloupe - Passenger Yacht",
+      "year": 2026
+    },
+    {
+      "name": "Q",
+      "category": "Yacht",
+      "comment": "Started out as Icebreaker supply - converted to yacht - Companion to new yacht named Skyfall",
+      "year": 2026
+    },
+    {
+      "name": "Go",
+      "category": "Yacht",
+      "comment": "Gustavia, St Barts - yacht - turquois",
+      "year": 2026
+    },
+    {
+      "name": "Star Flyer",
+      "category": "Yacht",
+      "comment": "Gustavia, St Barts - yacht",
+      "year": 2026
+    },
+    {
+      "name": "Le Bellot",
+      "category": "Cruise",
+      "comment": "French cruise ship",
+      "year": 2022
+    },
+    {
+      "name": "Radcliffe R Latimer",
+      "category": "Cruise",
+      "comment": "Lovely twilight cruise",
+      "year": 2023
+    },
+    {
+      "name": "Marella Explorer 2",
+      "category": "Cruise",
+      "comment": "St Maarten - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Sea Dream 1",
+      "category": "Cruise",
+      "comment": "St Maarten - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Ventura",
+      "category": "Cruise",
+      "comment": "Dominica - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Evrima",
+      "category": "Cruise",
+      "comment": "St Kitts - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Rhapsody of the Seas",
+      "category": "Cruise",
+      "comment": "St Kitts - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Starflyer",
+      "category": "Cruise",
+      "comment": "St Maarten - Cruise",
+      "year": 2025
+    },
+    {
+      "name": "Ziguidi",
+      "category": "Noteworthy",
+      "comment": "Castries, St. Lucia - Tug - very cool",
+      "year": 2026
+    }
+  ],
+  "milestones": [
+    {
+      "name": "G3 Marquis",
+      "comment": "First boat for James",
+      "date": "2020-07-09",
+      "year": 2020
+    },
+    {
+      "name": "Iver Ambition",
+      "comment": "Emma's first ship",
+      "date": "2025-06-29",
+      "year": 2025
+    }
+  ],
+  "busiest_days": [
+    {
+      "date": "2017-07-04",
+      "count": 13
+    },
+    {
+      "date": "2018-07-14",
+      "count": 12
+    },
+    {
+      "date": "2021-07-25",
+      "count": 11
+    },
+    {
+      "date": "2021-08-09",
+      "count": 11
+    },
+    {
+      "date": "2022-10-31",
+      "count": 11
+    },
+    {
+      "date": "2024-05-14",
+      "count": 11
+    },
+    {
+      "date": "2025-05-10",
+      "count": 11
+    },
+    {
+      "date": "2020-07-06",
+      "count": 10
+    },
+    {
+      "date": "2021-06-16",
+      "count": 10
+    },
+    {
+      "date": "2021-08-01",
+      "count": 10
+    }
+  ],
+  "lifers_per_year": [
+    {
+      "year": "2016",
+      "new": 57
+    },
+    {
+      "year": "2017",
+      "new": 94
+    },
+    {
+      "year": "2018",
+      "new": 47
+    },
+    {
+      "year": "2019",
+      "new": 41
+    },
+    {
+      "year": "2020",
+      "new": 50
+    },
+    {
+      "year": "2021",
+      "new": 77
+    },
+    {
+      "year": "2022",
+      "new": 91
+    },
+    {
+      "year": "2023",
+      "new": 50
+    },
+    {
+      "year": "2024",
+      "new": 101
+    },
+    {
+      "year": "2025",
+      "new": 74
+    },
+    {
+      "year": "2026",
+      "new": 49
+    }
+  ],
+  "rarities_sample": [
+    "ASG Kherson",
+    "Abb Vanessa",
+    "Adriaticborg",
+    "Aida Blue",
+    "Aidablu",
+    "Alamosborg",
+    "Alanc",
+    "Alangova",
+    "Alanis",
+    "Alinas",
+    "American Patriot",
+    "American Victory",
+    "Amstelborg",
+    "Annette A Desgagnes",
+    "Annette Desgagnes",
+    "Arcadia",
+    "Arcadia Desgagnes",
+    "Arctic",
+    "Argentia Desganes",
+    "Aspendos Seaways",
+    "Assiniboine",
+    "Astrid Maersk",
+    "Atlanticborg",
+    "Auriga Leader",
+    "Avonborg",
+    "Azoreborg",
+    "Azoresborg",
+    "BBC Alabama",
+    "BBC Alberta",
+    "BBC Arizona",
+    "BBC Arkhangelsk",
+    "BBC Austria",
+    "BBC Brazil",
+    "BBC Campana",
+    "BBC Dubai",
+    "BBC Elbe",
+    "BBC Greenland",
+    "BBC Hudson",
+    "BBC Manila",
+    "BBC Mississippi",
+    "BBC Polonia",
+    "BBC Russia",
+    "BBC Skipper",
+    "BBC Thames",
+    "BBC Tokyo",
+    "BBC Volga",
+    "BBC Wisconsin",
+    "Bandura",
+    "Beautrader",
+    "Belitaki",
+    "Billie",
+    "Birgit Knutsen",
+    "Black Pearl",
+    "Blue Star Delos",
+    "Brattingsborg",
+    "Brinn Courtney",
+    "Bristol Bay",
+    "Britannia",
+    "CG Sequoia",
+    "CMA CGM Cayenne"
+  ],
+  "rarities_total": 330
+}

@@ -59,13 +59,21 @@ Data & diagnostics:
 - `seed_mmsi_db.py` — bootstrap that database from an existing register CSV, so
   it starts populated with everything seen so far (operators re-resolved via
   current rules).
+- `ship_to_operator.json` — name → operator lookup built from a multi-year
+  spotting log (≈400 vessels). Consulted by `operators.py` for the fleets whose
+  names carry no usable prefix; the surest operator signal there is.
 - `clean_register.py` — dedupe a messy register: drop restart-duplicate spam,
   prune sightings outside the box, and re-resolve operators against current
   rules. Outputs a drop-in `register.csv` (`-o file` to write directly).
 - `operator_worklist.py` — list named-but-UNKNOWN vessels and assign
   MMSI → operator mappings (validated against the sprite-backed set).
-- `passage_stats.py` — LAN web page (port 8090) showing which ships have passed
-  Danger Island, how often, and recent crossings (`--demo` for sample data).
+- `passage_stats.py` — LAN web page (port 8090) with passage leaderboards:
+  this-year, lifetime, by-year, plus a "Hall of Fame" tab (`--demo` for samples).
+- `fun_stats.py` — mine the spotting log into `fun_stats.json` (exotics,
+  milestones, busiest days, new-ships-per-year, rarities) for the Hall of Fame.
+- `backfill_passages.py` — recover passages from logged register positions for
+  any gap in live detection (e.g. a period the service was down). The service
+  also runs this automatically on startup; the script is for manual/targeted use.
 - `coverage_probe.py` — listen for AIS base stations and render
   `coverage_map.html` (Leaflet) showing inferred receiver coverage vs. the
   vessels actually heard.
@@ -209,9 +217,11 @@ through the named ships, then returns to the board. Missing fields are omitted.
 
 ### Shared display behavior
 
-**Down / upbound.** Derived from course over ground (the river runs SW↔NE
-through the reach). *Downbound* (seaward, NE-ish) → cyan ▼; *upbound* (toward
-the lakes, SW-ish) → orange ▲; moored/anchored → grey ■.
+**Down / upbound.** Derived from course over ground, or inferred from
+destination when no course is available (the river runs SW↔NE through the
+reach). *Downbound* (seaward, NE-ish) → cyan ▼; *upbound* (toward the lakes,
+SW-ish) → orange ▲; moored → a small grey anchor; direction genuinely unknown →
+a dim grey dash (rather than a misleading arrow or anchor).
 
 **Brightness (sun-based, no extra hardware).** `schedule.py` computes sunrise/
 sunset for the reach and ramps over 30 min at dawn/dusk — bright by day, ~11%
@@ -305,20 +315,43 @@ AISSTREAM_KEY=... ESP32_SERIAL=/dev/ttyACM0 python3 register_service.py
 
 - **`REGISTER_LOG`** — every vessel the feed delivers (first seen, and again
   when its name/operator resolves; deduped, and the dedup persists across
-  restarts so it stays compact). The register CSV includes the resolved
-  operator/code/flag, making it the best seed for `mmsi_to_operator.json` and
-  for `seed_mmsi_db.py`. On restart the service also warm-starts the display
-  from this file, so the board isn't empty while waiting for ships to re-report.
-- **`PASSAGE_LOG`** — vessels inferred to have transited Danger Island. There's
-  no AIS coverage at the island itself, so a passage is inferred when a ship's
-  position crosses the home point between two sightings (seen above, later
-  below = downbound, and vice versa). View the tally at `passage_stats.py`.
+  restarts so it stays compact). Rows carry the resolved operator/code/flag plus
+  the vessel's course and speed (`cog`/`sog`), making it the best seed for
+  `seed_mmsi_db.py`. On restart the service warm-starts the display from this
+  file *and* primes passage detection's memory, so the board isn't empty and a
+  crossing that straddles a restart still logs.
+- **`PASSAGE_LOG`** — vessels detected transiting Danger Island. There's no AIS
+  coverage at the island itself, so a passage is inferred when a ship's position
+  crosses the home point between two sightings (above→below = downbound, and
+  vice versa). On startup the service also **auto-backfills** any crossings it
+  finds in the register that aren't already logged — recovering passages missed
+  while it was down (de-duped, safe every boot). View the leaderboards at
+  `passage_stats.py`. `backfill_passages.py` does the same scan manually for a
+  specific file or date range.
 - **`MMSI_DB`** — the persistent identity database (see the file map). Grows as
   static messages resolve vessels; pre-fills known MMSIs on sight. Bootstrap it
   from an existing register with `python3 seed_mmsi_db.py register.csv`.
 
+**Direction (downbound / upbound / moored / unknown).** Resolved from real
+course when the ship is reporting one; for a warm-started or older row with no
+course, inferred from where it is vs. where it's headed (the `dest` port's
+position on the river). Only when neither is available does a vessel show the
+neutral "unknown" dash rather than a fabricated arrow. Going forward, `cog`/`sog`
+are logged so future restarts restore true direction without inference.
+
 Use absolute paths if the service and `passage_stats.py` run from different
 directories. The live variant logs vessels with `SHIPWALL_LOG=ships.csv`.
+
+### Passage stats & Hall of Fame
+
+`passage_stats.py` serves a phone-friendly page on `STATS_PORT` (default 8090)
+that reads `passages.csv` fresh on every load (stateless — a restart loses
+nothing). Three leaderboard tabs — **this year**, **lifetime**, **by year** —
+ranked by name+operator, so a ship counts as itself across seasons. If a
+`fun_stats.json` is present (built by `fun_stats.py` from the spotting log) a
+**Hall of Fame** tab appears: personal milestones, exotics/oddities, busiest
+days, new ships per year, and one-time-only rarities. Run `--demo` for sample
+data with no `passages.csv`.
 
 The register mock can also auto-save a PNG to `captures/` the first time a
 vessel appears, but this is **off by default** (set `CAPTURE=true` in

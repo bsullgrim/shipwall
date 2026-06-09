@@ -163,6 +163,45 @@ def river_progress(lat, lon):
 HOME_PROGRESS = river_progress(HOME_POINT[0], HOME_POINT[1])
 
 
+# Destination ports along the river, as approximate progress 0 (lake) .. 1
+# (lock/sea). Used to infer direction for a sighting that lacks COG -- e.g. an
+# older logged row -- by comparing where the ship is to where it's headed.
+_DEST_PROGRESS = {
+    # toward the lakes / upbound (low progress)
+    "THUNDER BAY": 0.0, "SAULT STE MARIE": 0.0, "USSAW": 0.0, "DETROIT": 0.0,
+    "USDET": 0.0, "SARNIA": 0.0, "CLEVELAND": 0.0, "USCLE": 0.0, "NANTICOKE": 0.0,
+    "NANICOKE": 0.0, "HAMILTON": 0.05, "CAHAM": 0.05, "OSWEGO": 0.05,
+    "TORONTO": 0.06, "PORT WELLER": 0.05, "KINGSTON": 0.08, "CATCY": 0.0,
+    # toward the sea / downbound (high progress)
+    "MONTREAL": 1.0, "CA MTR": 1.0, "CAMTR": 1.0, "VALLEYFIELD": 0.95,
+    "SOREL": 1.0, "SORREL": 1.0, "QUEBEC": 1.0, "QUEBEC CITY": 1.0,
+    "PORT CARTIER": 1.0, "SEPT-ILES": 1.0, "HALIFAX": 1.0, "USASF": 1.0,
+    "CATHU": 1.0, "US LDM": 1.0, "USLDM": 1.0, "VALLEYFIELD QC": 0.95,
+}
+
+
+def dest_progress(dest):
+    if not dest:
+        return None
+    key = dest.strip().upper()
+    if key in _DEST_PROGRESS:
+        return _DEST_PROGRESS[key]
+    for k, v in _DEST_PROGRESS.items():
+        if key.startswith(k) or k in key:
+            return v
+    return None
+
+
+def dir_from_dest(lat, lon, dest):
+    """Infer 'D'/'U' from where the ship is vs. where it's headed. None if the
+    destination is unknown or too close to the ship's current progress."""
+    here = river_progress(lat, lon)
+    there = dest_progress(dest)
+    if here is None or there is None or abs(there - here) < 0.03:
+        return None
+    return "D" if there > here else "U"
+
+
 # --- Passage detection (crossings of Danger Island) --------------------------
 # Track each MMSI's last river-progress + time; when a new sighting lands on the
 # opposite side of HOME_PROGRESS, the ship transited past us.
@@ -223,13 +262,29 @@ def check_passage(mmsi, lat, lon, observed, name, op):
 
 
 def bound_dir(cog, sog):
-    """NE course = downbound (D, toward sea), SW = upbound (U), slow = moored."""
+    """NE course = downbound (D, toward sea), SW = upbound (U), slow = moored
+    (M). Returns '?' when we have no velocity data at all -- e.g. a vessel
+    warm-started from the register, which stores identity but not course/speed.
+    Such a ship was underway when logged; we just don't know its direction
+    until a live position arrives, so don't mislabel it as moored."""
+    if cog is None and sog is None:
+        return "?"                       # seeded / no live position yet
     if (sog or 0) < MIN_SPEED_KTS:
-        return "M"
+        return "M"                       # observed near-zero speed = moored
     if cog is None:
         return "?"
     c = cog % 360
     return "D" if (c >= 315 or c < 135) else "U"
+
+
+def _dir_for(v):
+    """Best available direction for a vessel: real course if we have it,
+    else inferred from destination + position (for seeded/old rows), else '?'."""
+    d = bound_dir(v.get("cog"), v.get("sog"))
+    if d in ("D", "U", "M"):
+        return d
+    inferred = dir_from_dest(v.get("lat"), v.get("lon"), v.get("dest"))
+    return inferred or "?"
 
 
 # --- Vessel register ----------------------------------------------------------
@@ -507,7 +562,23 @@ def _seed_vessels_from_register():
             v["lat"], v["lon"] = lat, lon
         if row.get("dest"):
             v["dest"] = row["dest"]
+        # Course/speed if the row has them (new-schema rows); else leave unset
+        # and let build_frame fall back to destination inference.
+        cog = num(row.get("cog"))
+        sog = num(row.get("sog"))
+        if cog is not None:
+            v["cog"] = cog
+        if sog is not None:
+            v["sog"] = sog
         vessels[m] = v
+        # Prime passage detection's memory with this last-known progress, so a
+        # crossing that straddles a restart still logs (the ship's pre-restart
+        # position is remembered, not wiped). Without this, the first sighting
+        # after every restart has no prior to compare against and is missed.
+        if PASSAGE_LOG and lat is not None and lon is not None:
+            p = river_progress(lat, lon)
+            if p is not None:
+                _last_progress[m] = (p, t)
         seeded += 1
     prune()                       # drop any already older than the window
     if seeded:
@@ -540,6 +611,8 @@ def log_vessel(mmsi, v, op, code, flag):
         "lat": round(v["lat"], 4) if v.get("lat") is not None else "",
         "lon": round(v["lon"], 4) if v.get("lon") is not None else "",
         "dest": v.get("dest", "") or "",
+        "cog": round(v["cog"], 1) if v.get("cog") is not None else "",
+        "sog": round(v["sog"], 1) if v.get("sog") is not None else "",
     }
     try:
         write_header = not _log_header_written and not os.path.exists(VESSEL_LOG)
@@ -583,7 +656,7 @@ def build_frame():
             "op":   op,
             "code": code,
             "type": v.get("type", "VSL"),
-            "dir":  bound_dir(v.get("cog"), v.get("sog") or 0.0),
+            "dir":  _dir_for(v),
             "sog":  round(v.get("sog") or 0.0, 1),
             "cog":  round(v.get("cog") or 0.0),
             "navstat": nav_status_label(v.get("navstat")),
@@ -712,6 +785,83 @@ async def subscribe():
                 await asyncio.sleep(5)
 
 
+def _backfill_passages_from_register():
+    """On startup, scan the register for crossings of Danger Island that aren't
+    already in PASSAGE_LOG and log them. This recovers passages missed while the
+    service was down (or before PASSAGE_LOG was enabled): warm-start handles a
+    crossing that straddles a restart, this handles crossings that happened
+    entirely during downtime. Safe to run every boot -- it de-dupes against
+    existing passages by (mmsi, day, direction)."""
+    if not PASSAGE_LOG or not VESSEL_LOG or HOME_PROGRESS is None:
+        return
+    if not os.path.exists(VESSEL_LOG):
+        return
+
+    # already-logged crossings, to avoid double-logging
+    have = set()
+    if os.path.exists(PASSAGE_LOG):
+        try:
+            with open(PASSAGE_LOG, newline="") as f:
+                for row in _csv.DictReader(f):
+                    have.add((row.get("mmsi", ""), row.get("pass_time", "")[:10],
+                              row.get("direction", "")))
+        except Exception:
+            pass
+
+    # gather each vessel's time-sorted (epoch, progress, name, op) sightings
+    tracks = {}
+    try:
+        with open(VESSEL_LOG, newline="") as f:
+            for row in _csv.DictReader(f):
+                m = (row.get("mmsi") or "").strip()
+                if not m.isdigit():
+                    continue
+                try:
+                    lat = float(row["lat"]); lon = float(row["lon"])
+                except (ValueError, TypeError, KeyError):
+                    continue
+                t = _parse_iso(row.get("timestamp", ""))
+                p = river_progress(lat, lon)
+                if t is None or p is None:
+                    continue
+                tracks.setdefault(int(m), []).append(
+                    (t, p, (row.get("name") or "").strip(),
+                     (row.get("operator") or "").strip()))
+    except Exception as e:
+        print(f"[backfill] could not read {VESSEL_LOG}: {e}")
+        return
+
+    added = 0
+    for mmsi, pts in tracks.items():
+        pts.sort(key=lambda r: r[0])
+        # carry best-known name/operator forward across the track
+        name = ""; op = ""
+        for (_, _, nm, o) in pts:
+            if nm:
+                name = nm
+            if o and o != "UNKNOWN":
+                op = o
+        for (t0, p0, _, _), (t1, p1, _, _) in zip(pts, pts[1:]):
+            direction = None
+            if p0 < HOME_PROGRESS <= p1:
+                direction = "downbound"
+            elif p0 > HOME_PROGRESS >= p1:
+                direction = "upbound"
+            if not direction:
+                continue
+            t_pass_iso = _dt.datetime.fromtimestamp(
+                t0 + ((HOME_PROGRESS - p0) / (p1 - p0) if p1 != p0 else 0.5)
+                * (t1 - t0)).isoformat(timespec="seconds")
+            if (str(mmsi), t_pass_iso[:10], direction) in have:
+                continue
+            _log_passage(mmsi, name, op or "UNKNOWN", direction, t0, p0, t1, p1)
+            have.add((str(mmsi), t_pass_iso[:10], direction))
+            added += 1
+    if added:
+        print(f"[backfill] recovered {added} passage(s) from the register "
+              f"(missed during downtime)")
+
+
 if __name__ == "__main__":
     print("St. Lawrence Ship Wall -- REGISTER mode")
     print(f"  Retention: {RETAIN_HOURS:.0f} hours")
@@ -725,4 +875,5 @@ if __name__ == "__main__":
     _seed_log_from_existing()
     load_mmsi_db()
     _seed_vessels_from_register()
+    _backfill_passages_from_register()    # recover any crossings missed while down
     asyncio.run(subscribe())

@@ -23,7 +23,16 @@ from collections import defaultdict
 
 PORT = int(os.environ.get("STATS_PORT", "8090"))
 PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "passages.csv").strip()
+FUN_STATS = os.environ.get("FUN_STATS", "fun_stats.json").strip()
 DEMO = False                       # set by --demo; serves built-in sample data
+
+
+def load_fun_stats():
+    try:
+        with open(FUN_STATS, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return None
 
 # Built-in sample passages so the page can be previewed with no real data
 # (python passage_stats.py --demo). Mirrors the passages.csv schema.
@@ -69,27 +78,45 @@ def load_passages():
     return rows
 
 
+def _year(r):
+    return (r.get("pass_time", "") or "")[:4]
+
+
 def summarize(rows):
+    """Leaderboard keyed on name+operator (works without MMSI, and counts a
+    ship as itself across years). Returns leaderboard + recent passages."""
     by_ship = defaultdict(lambda: {"name": "", "operator": "", "count": 0,
                                    "down": 0, "up": 0, "last": ""})
     for r in rows:
-        mmsi = r.get("mmsi", "")
-        s = by_ship[mmsi]
-        s["name"] = r.get("name", "") or s["name"]
-        s["operator"] = r.get("operator", "") or s["operator"]
+        name = (r.get("name", "") or "").strip()
+        op = (r.get("operator", "") or "").strip()
+        key = (name.upper(), op)
+        s = by_ship[key]
+        s["name"] = name or s["name"]
+        s["operator"] = op or s["operator"]
         s["count"] += 1
-        if r.get("direction") == "downbound":
+        d = r.get("direction")
+        if d == "downbound":
             s["down"] += 1
-        elif r.get("direction") == "upbound":
+        elif d == "upbound":
             s["up"] += 1
         pt = r.get("pass_time", "")
         if pt > s["last"]:
             s["last"] = pt
-    leaderboard = sorted(
-        ({"mmsi": m, **v} for m, v in by_ship.items()),
-        key=lambda x: (-x["count"], x["name"]))
+    leaderboard = sorted(by_ship.values(),
+                         key=lambda x: (-x["count"], x["name"]))
     recent = sorted(rows, key=lambda r: r.get("pass_time", ""), reverse=True)[:25]
     return leaderboard, recent
+
+
+def totals(rows):
+    return {
+        "total": len(rows),
+        "unique": len({((r.get("name") or "").upper(), r.get("operator") or "")
+                       for r in rows}),
+        "down": sum(1 for r in rows if r.get("direction") == "downbound"),
+        "up": sum(1 for r in rows if r.get("direction") == "upbound"),
+    }
 
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
@@ -99,7 +126,7 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
   :root{color-scheme:dark}
   body{margin:0;background:#0e1116;color:#d8dee9;font-family:system-ui,-apple-system,sans-serif;padding:16px}
   h1{font-size:20px;margin:0 0 2px} h2{font-size:15px;color:#8b98a9;margin:24px 0 8px;font-weight:600}
-  .sub{color:#6e7b8c;font-size:13px;margin-bottom:8px}
+  .sub{color:#6e7b8c;font-size:13px;margin-bottom:12px}
   table{border-collapse:collapse;width:100%;font-size:14px}
   th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #1d2530}
   th{color:#8b98a9;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
@@ -108,53 +135,166 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
   .code{color:#9ad0ff;font-weight:600}
   .down{color:#50c8ff} .up{color:#ff963c}
   .big{font-size:15px;font-weight:600}
-  .tot{display:flex;gap:24px;margin:10px 0 4px;flex-wrap:wrap}
+  .rank{color:#6e7b8c;font-variant-numeric:tabular-nums;width:1.6em}
+  .tot{display:flex;gap:16px;margin:10px 0 4px;flex-wrap:wrap}
   .tot div{background:#141a22;border-radius:8px;padding:10px 16px}
   .tot b{display:block;font-size:24px;color:#fff} .tot span{font-size:12px;color:#8b98a9}
   .empty{color:#6e7b8c;padding:20px 0}
+  .tabs{display:flex;gap:4px;margin:4px 0 4px;flex-wrap:wrap}
+  .tabs button{background:#141a22;color:#9aa7b6;border:1px solid #1d2530;border-radius:7px;
+    padding:7px 14px;font-size:14px;cursor:pointer}
+  .tabs button.on{background:#1d3550;color:#cfe6ff;border-color:#2a4a6e}
+  select{background:#141a22;color:#d8dee9;border:1px solid #1d2530;border-radius:7px;padding:6px 10px;font-size:14px}
   a{color:#9ad0ff}
 </style></head><body>
 <h1>St. Lawrence Ship Wall</h1>
-<div class=sub>Vessels that have passed Danger Island &mdash; inferred from upstream/downstream sightings</div>
+<div class=sub>Vessels passing Danger Island &mdash; live detections plus the historical spotting log</div>
+<div class=tabs id=tabs></div>
 <div id=content><div class=empty>loading&hellip;</div></div>
 <script>
+let DATA=null, VIEW='current';
 async function load(){
-  const r=await fetch('/data'); const d=await r.json();
-  const c=document.getElementById('content');
-  if(!d.leaderboard.length){
-    c.innerHTML='<div class=empty>No passages logged yet. Once ships are seen '+
-      'both above and below Danger Island, they\\'ll appear here.</div>'; return;
-  }
-  let h='<div class=tot>'+
-    '<div><b>'+d.total+'</b><span>total passages</span></div>'+
-    '<div><b>'+d.unique+'</b><span>distinct vessels</span></div>'+
-    '<div><b>'+d.down+'</b><span>downbound</span></div>'+
-    '<div><b>'+d.up+'</b><span>upbound</span></div></div>';
-  h+='<h2>Most frequent visitors</h2><table><tr><th>Ship</th><th>Op</th>'+
-     '<th class=num>Passes</th><th class=num>Down</th><th class=num>Up</th><th>Last seen</th></tr>';
-  for(const s of d.leaderboard){
-    h+='<tr><td class=big>'+esc(s.name)+'</td><td class=code>'+esc(s.operator)+'</td>'+
+  const r=await fetch('/data'); DATA=await r.json();
+  renderTabs(); render();
+}
+function renderTabs(){
+  const t=document.getElementById('tabs');
+  const tabs=[['current','This year ('+DATA.current_year+')'],
+              ['lifetime','Lifetime'],
+              ['history','By year']];
+  if(DATA.fun) tabs.push(['fun','Hall of Fame']);
+  t.innerHTML=tabs.map(([k,label])=>
+    '<button class="'+(VIEW===k?'on':'')+'" data-view="'+k+'">'+label+'</button>'
+  ).join('');
+  t.querySelectorAll('button').forEach(btn=>{
+    btn.onclick=()=>{ VIEW=btn.getAttribute('data-view'); renderTabs(); render(); };
+  });
+}
+function totsBlock(t){
+  return '<div class=tot>'+
+    '<div><b>'+t.total+'</b><span>passages</span></div>'+
+    '<div><b>'+t.unique+'</b><span>distinct vessels</span></div>'+
+    '<div><b>'+t.down+'</b><span>downbound</span></div>'+
+    '<div><b>'+t.up+'</b><span>upbound</span></div></div>';
+}
+function leaderboardTable(lb, limit){
+  if(!lb.length) return '<div class=empty>No passages recorded.</div>';
+  let h='<table><tr><th class=rank>#</th><th>Ship</th><th>Op</th>'+
+     '<th class=num>Passes</th><th class=num>Down</th><th class=num>Up</th><th>Last</th></tr>';
+  lb.slice(0,limit||lb.length).forEach((s,i)=>{
+    h+='<tr><td class=rank>'+(i+1)+'</td>'+
+       '<td class=big>'+esc(s.name)+'</td><td class=code>'+esc(s.operator)+'</td>'+
        '<td class="num big">'+s.count+'</td>'+
        '<td class="num down">'+(s.down||'')+'</td>'+
        '<td class="num up">'+(s.up||'')+'</td>'+
-       '<td>'+fmt(s.last)+'</td></tr>';
+       '<td>'+fmtDay(s.last)+'</td></tr>';
+  });
+  return h+'</table>';
+}
+function recentTable(recent){
+  if(!recent||!recent.length) return '';
+  let h='<h2>Recent passages</h2><table><tr><th>When</th><th>Ship</th><th>Direction</th></tr>';
+  for(const r of recent){
+    h+='<tr><td>'+fmtDay(r.pass_time)+'</td><td>'+esc(r.name)+'</td><td>'+dirLabel(r.direction)+'</td></tr>';
   }
-  h+='</table><h2>Recent passages</h2><table><tr><th>When</th><th>Ship</th>'+
-     '<th>Direction</th></tr>';
-  for(const r of d.recent){
-    const dir=r.direction==='downbound'?'<span class=down>&#9660; downbound</span>'
-                                       :'<span class=up>&#9650; upbound</span>';
-    h+='<tr><td>'+fmt(r.pass_time)+'</td><td>'+esc(r.name)+'</td><td>'+dir+'</td></tr>';
+  return h+'</table>';
+}
+function dirLabel(d){
+  if(d==='downbound') return '<span class=down>&#9660; downbound</span>';
+  if(d==='upbound') return '<span class=up>&#9650; upbound</span>';
+  return '<span style="color:#6e7b8c">&mdash;</span>';
+}
+function render(){
+  const c=document.getElementById('content');
+  if(VIEW==='current'){
+    const v=DATA.current;
+    c.innerHTML='<h2>'+DATA.current_year+' season</h2>'+totsBlock(v.totals)+
+      '<h2>Most frequent this year</h2>'+leaderboardTable(v.leaderboard)+
+      recentTable(v.recent);
+  } else if(VIEW==='lifetime'){
+    const v=DATA.lifetime;
+    c.innerHTML='<h2>All-time ('+DATA.years[DATA.years.length-1]+'&ndash;'+DATA.years[0]+')</h2>'+
+      totsBlock(v.totals)+
+      '<h2>Most frequent visitors, all-time</h2>'+leaderboardTable(v.leaderboard);
+  } else if(VIEW==='history'){
+    // history: a year picker + that year's board
+    let h='<h2>Browse a year</h2><select id=yrsel onchange="renderYear()">';
+    for(const y of DATA.years) h+='<option value="'+y+'">'+y+'</option>';
+    h+='</select><div id=yearbox></div>';
+    c.innerHTML=h; renderYear();
+  } else {
+    renderFun(c);
   }
-  h+='</table>';
+}
+function renderFun(c){
+  const f=DATA.fun;
+  if(!f){ c.innerHTML='<div class=empty>No log stats available.</div>'; return; }
+  const t=f.totals;
+  let h='<div class=tot>'+
+    '<div><b>'+t.distinct_ships+'</b><span>distinct ships ('+t.span+')</span></div>'+
+    '<div><b>'+t.distinct_fleets+'</b><span>operators seen</span></div>'+
+    '<div><b>'+t.one_timers+'</b><span>seen only once</span></div></div>';
+
+  // Milestones first -- the personal ones
+  if(f.milestones && f.milestones.length){
+    h+='<h2>Milestones</h2><table>';
+    for(const m of f.milestones)
+      h+='<tr><td style="color:#8b98a9;white-space:nowrap">'+esc(m.date)+'</td>'+
+         '<td class=big>'+esc(m.name)+'</td><td>'+esc(m.comment)+'</td></tr>';
+    h+='</table>';
+  }
+  // Exotics
+  if(f.exotics && f.exotics.length){
+    h+='<h2>Exotics &amp; oddities</h2><table>'+
+       '<tr><th>Type</th><th>Ship</th><th>Note</th></tr>';
+    for(const e of f.exotics)
+      h+='<tr><td class=code style="white-space:nowrap">'+esc(e.category)+'</td>'+
+         '<td class=big>'+esc(e.name)+'</td>'+
+         '<td style="color:#9aa7b6">'+esc(e.comment)+'</td></tr>';
+    h+='</table>';
+  }
+  // New ships per year (lifers)
+  if(f.lifers_per_year && f.lifers_per_year.length){
+    const mx=Math.max(...f.lifers_per_year.map(x=>x.new));
+    h+='<h2>New ships added each year</h2><table>';
+    for(const y of f.lifers_per_year){
+      const w=Math.round(y.new/mx*180);
+      h+='<tr><td style="white-space:nowrap">'+esc(y.year)+'</td>'+
+         '<td style="width:100%"><span style="display:inline-block;height:11px;'+
+         'background:#2a6cb8;border-radius:2px;width:'+w+'px;vertical-align:middle"></span> '+
+         '<span class=num>'+y.new+'</span></td></tr>';
+    }
+    h+='</table>';
+  }
+  // Busiest days
+  if(f.busiest_days && f.busiest_days.length){
+    h+='<h2>Busiest days ever</h2><table><tr><th>Date</th><th class=num>Ships</th></tr>';
+    for(const b of f.busiest_days)
+      h+='<tr><td>'+fmtDay(b.date)+'</td><td class="num big">'+b.count+'</td></tr>';
+    h+='</table>';
+  }
+  // Rarities
+  if(f.rarities_sample && f.rarities_sample.length){
+    h+='<h2>One and done <span style="color:#6e7b8c;font-weight:400">('+
+       f.rarities_total+' ships seen exactly once)</span></h2>'+
+       '<div style="color:#9aa7b6;line-height:1.7">'+
+       f.rarities_sample.map(esc).join(' &middot; ')+
+       (f.rarities_total>f.rarities_sample.length?' &hellip;':'')+'</div>';
+  }
   c.innerHTML=h;
 }
-function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
-function fmt(iso){ if(!iso)return '';
-  const d=new Date(iso); if(isNaN(d))return iso;
-  return d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+function renderYear(){
+  const y=document.getElementById('yrsel').value;
+  const v=DATA.by_year[y];
+  document.getElementById('yearbox').innerHTML=
+    totsBlock(v.totals)+leaderboardTable(v.leaderboard);
 }
-load(); setInterval(load, 30000);
+function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
+function fmtDay(iso){ if(!iso)return '';
+  const d=new Date(iso); if(isNaN(d))return iso;
+  return d.toLocaleDateString([], {year:'numeric',month:'short',day:'numeric'});
+}
+load(); setInterval(load, 60000);
 </script></body></html>"""
 
 
@@ -165,14 +305,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/data":
             rows = load_passages()
-            leaderboard, recent = summarize(rows)
+            years = sorted({_year(r) for r in rows if _year(r)}, reverse=True)
+            cur_year = years[0] if years else ""
+            cur_rows = [r for r in rows if _year(r) == cur_year]
+            cur_lb, cur_recent = summarize(cur_rows)
+            life_lb, life_recent = summarize(rows)
+            # per-year leaderboards (top entries each) for the history view
+            by_year = {}
+            for y in years:
+                yr_rows = [r for r in rows if _year(r) == y]
+                lb, _ = summarize(yr_rows)
+                by_year[y] = {"totals": totals(yr_rows), "leaderboard": lb}
             payload = json.dumps({
-                "total": len(rows),
-                "unique": len(leaderboard),
-                "down": sum(1 for r in rows if r.get("direction") == "downbound"),
-                "up": sum(1 for r in rows if r.get("direction") == "upbound"),
-                "leaderboard": leaderboard,
-                "recent": recent,
+                "current_year": cur_year,
+                "years": years,
+                "current": {"totals": totals(cur_rows),
+                            "leaderboard": cur_lb, "recent": cur_recent},
+                "lifetime": {"totals": totals(rows),
+                             "leaderboard": life_lb, "recent": life_recent},
+                "by_year": by_year,
+                "fun": load_fun_stats(),
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

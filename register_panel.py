@@ -176,8 +176,12 @@ function dirGlyph(dir,x,y){
   cx.fillStyle=col;
   if(dir==='D'){for(let r=0;r<4;r++)for(let c=r;c<=4-r;c++)cx.fillRect(x+c,y+r,1,1);}
   else if(dir==='U'){for(let r=0;r<4;r++)for(let c=r;c<=4-r;c++)cx.fillRect(x+c,y+(3-r),1,1);}
-  else if(dir==='M'){for(let r=1;r<4;r++)for(let c=1;c<4;c++)cx.fillRect(x+c,y+r,1,1);}
-  else cx.fillRect(x+2,y+2,1,1);
+  else if(dir==='M'){
+    // small anchor: ring, stock crossbar, shank, curved flukes
+    const px=[[2,0],[1,1],[2,1],[3,1],[2,2],[0,3],[2,3],[4,3],[1,4],[2,4],[3,4]];
+    for(let i=0;i<px.length;i++) cx.fillRect(x+px[i][0],y+px[i][1],1,1);
+  }
+  else {cx.fillRect(x+1,y+2,3,1);}     // '?' / unknown: dim dash, not a moored block
 }
 
 // ---- BOARD mode: scrolling departure-board list ----------------------------
