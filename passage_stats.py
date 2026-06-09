@@ -19,7 +19,17 @@ import http.server
 import json
 import os
 import socketserver
+import sys
 from collections import defaultdict
+
+# Re-resolve operators against the current rules at read time, so passages
+# logged before a ship's operator was known fill in as soon as the name resolves
+# (and a ship doesn't split into separate UNKNOWN/operator leaderboard entries).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import operators as _ops
+except Exception:
+    _ops = None
 
 PORT = int(os.environ.get("STATS_PORT", "8090"))
 PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "passages.csv").strip()
@@ -74,7 +84,21 @@ def load_passages():
         with open(PASSAGE_LOG, newline="") as f:
             rows = list(csv.DictReader(f))
     except Exception:
-        pass
+        return rows
+    # Fill in/refresh the operator from the ship's name using current rules, so
+    # leaderboards reflect what we know now -- not what was known at crossing
+    # time. A real name that still resolves to UNKNOWN is left as-is.
+    if _ops is not None:
+        for r in rows:
+            name = (r.get("name") or "").strip()
+            if not name or name.upper().startswith("MMSI "):
+                continue
+            try:
+                op = _ops.operator_for(0, name)
+            except Exception:
+                continue
+            if op and op != "UNKNOWN":
+                r["operator"] = op
     return rows
 
 
