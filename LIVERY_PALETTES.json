@@ -1,0 +1,55 @@
+{
+  "ALGOMA": {
+    "bg": "none"
+  },
+  "CSL": {
+    "bg": "none"
+  },
+  "INTERLAKE": {
+    "bg": "none"
+  },
+  "ASC": {
+    "bg": "none",
+    "file": "Stack-ASC.png"
+  },
+  "LOWERLAKES": {
+    "bg": "none",
+    "file": "Stack-LLT-GRN.png"
+  },
+  "ANDRIE": {
+    "bg": "none",
+    "file": "Stack-Andrie.png"
+  },
+  "CLIFFS": {
+    "bg": "none",
+    "file": "Stack-Cliffs.png"
+  },
+  "DESGAGNES": {
+    "bg": "none",
+    "file": "Stack-DesgagnesB.png"
+  },
+  "G3": {
+    "bg": "none",
+    "file": "Stack-G3.png"
+  },
+  "GLF": {
+    "bg": "none",
+    "file": "Stack-GLF.png"
+  },
+  "HOLCIM": {
+    "bg": "none",
+    "file": "Stack-Holcim.png"
+  },
+  "MCASPHALT": {
+    "bg": "none",
+    "file": "Stack-McAsphalt.png"
+  },
+  "NACC": {
+    "bg": "none",
+    "file": "Stack-NACC.png"
+  },
+  "VTB": {
+    "bg": "none",
+    "file": "Stack-VTB.png"
+  }
+}

@@ -207,6 +207,10 @@ def dir_from_dest(lat, lon, dest):
 # opposite side of HOME_PROGRESS, the ship transited past us.
 _last_progress = {}            # mmsi -> (progress, observed_time)
 _passage_header_written = False
+# Guard against logging the same crossing repeatedly when a ship lingers or
+# its AIS position jitters back and forth across HOME_PROGRESS. Keyed on
+# (mmsi, day, direction) -- the same key the startup backfill de-dupes on.
+_logged_passages = set()
 
 
 def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after):
@@ -254,11 +258,27 @@ def check_passage(mmsi, lat, lon, observed, name, op):
     if prev is None:
         return
     p_prev, t_prev = prev
-    # Crossed the home point if the two sightings straddle HOME_PROGRESS.
-    if (p_prev < HOME_PROGRESS <= p) :
-        _log_passage(mmsi, name, op, "downbound", t_prev, p_prev, observed, p)
-    elif (p_prev > HOME_PROGRESS >= p):
-        _log_passage(mmsi, name, op, "upbound", t_prev, p_prev, observed, p)
+    # Crossed the home point if the two sightings straddle HOME_PROGRESS. Require
+    # the ship to be clearly on each side (beyond a small margin), so a vessel
+    # moored or drifting right at the line doesn't log phantom crossings from
+    # position jitter -- it must move decisively across.
+    M = 0.02
+    direction = None
+    if p_prev < HOME_PROGRESS - M and p > HOME_PROGRESS + M:
+        direction = "downbound"
+    elif p_prev > HOME_PROGRESS + M and p < HOME_PROGRESS - M:
+        direction = "upbound"
+    if not direction:
+        return
+    # De-dupe: one logged crossing per ship per day per direction. Without this,
+    # a ship that lingers or whose position jitters across HOME_PROGRESS logs the
+    # same passage over and over (creeping seen_after, same seen_before).
+    day = _dt.datetime.fromtimestamp(observed).date().isoformat()
+    key = (str(mmsi), day, direction)
+    if key in _logged_passages:
+        return
+    _logged_passages.add(key)
+    _log_passage(mmsi, name, op, direction, t_prev, p_prev, observed, p)
 
 
 def bound_dir(cog, sog):
@@ -807,6 +827,9 @@ def _backfill_passages_from_register():
                               row.get("direction", "")))
         except Exception:
             pass
+    # Prime the live de-dupe guard with everything already on disk, so live
+    # detection won't re-log a crossing that's already recorded after a restart.
+    _logged_passages.update(have)
 
     # gather each vessel's time-sorted (epoch, progress, name, op) sightings
     tracks = {}
@@ -842,10 +865,11 @@ def _backfill_passages_from_register():
             if o and o != "UNKNOWN":
                 op = o
         for (t0, p0, _, _), (t1, p1, _, _) in zip(pts, pts[1:]):
+            M = 0.02
             direction = None
-            if p0 < HOME_PROGRESS <= p1:
+            if p0 < HOME_PROGRESS - M and p1 > HOME_PROGRESS + M:
                 direction = "downbound"
-            elif p0 > HOME_PROGRESS >= p1:
+            elif p0 > HOME_PROGRESS + M and p1 < HOME_PROGRESS - M:
                 direction = "upbound"
             if not direction:
                 continue
@@ -856,6 +880,7 @@ def _backfill_passages_from_register():
                 continue
             _log_passage(mmsi, name, op or "UNKNOWN", direction, t0, p0, t1, p1)
             have.add((str(mmsi), t_pass_iso[:10], direction))
+            _logged_passages.add((str(mmsi), t_pass_iso[:10], direction))
             added += 1
     if added:
         print(f"[backfill] recovered {added} passage(s) from the register "

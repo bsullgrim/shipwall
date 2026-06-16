@@ -21,6 +21,8 @@ coverage_map*.html
 captures/
 sprites_preview.png
 gallery.png
+funnels/archive
+funnels/raw
 
 # Source funnel photos: kept local, NOT committed. They're typically someone
 # else's copyrighted photographs (e.g. from boatnerd); republishing them in a

@@ -70,14 +70,18 @@ def load_sprites(path="ship_sprites.h"):
     size_m = re.search(r"#define SPRITE_SIZE (\d+)", text)
     size = int(size_m.group(1)) if size_m else 16
     sprites = {}
+    minis = {}
     for m in re.finditer(r"SPR_(\w+)\[\d+\]\s*PROGMEM\s*=\s*\{([^}]*)\}", text):
         key = m.group(1)
         vals = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", m.group(2))]
-        sprites[key] = vals
-    return sprites, size
+        if key.endswith("_MINI"):
+            minis[key[:-5]] = vals          # strip suffix -> operator key
+        else:
+            sprites[key] = vals
+    return sprites, size, minis
 
 
-SPRITES, SPRITE_SIZE = load_sprites()
+SPRITES, SPRITE_SIZE, MINIS = load_sprites()
 
 
 def load_font(path="font5x7.js"):
@@ -115,6 +119,7 @@ def rgb565_to_hex(c):
 
 
 SPRITES_HEX = {k: [rgb565_to_hex(c) for c in vals] for k, vals in SPRITES.items()}
+MINIS_HEX = {k: [rgb565_to_hex(c) for c in vals] for k, vals in MINIS.items()}
 
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
@@ -130,6 +135,8 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <div id=meta>waiting for first frame&hellip;</div>
 <script>
 const SPRITES = %SPRITES%;
+const MINIS = %MINIS%;
+const MINI_SIZE = 8;
 const SPRITE_SIZE = %SPRITE_SIZE%;
 const FONT = %FONT%;
 const W=128, H=64;
@@ -165,6 +172,19 @@ function spriteScaled(key,ox,oy,dim){
     for(let x=0;x<dim;x++){
       const sx=(x*SPRITE_SIZE/dim)|0;
       const c=px[sy*SPRITE_SIZE+sx];
+      if(c&&c!=='#000000'){cx.fillStyle=c;cx.fillRect(ox+x,oy+y,1,1);}
+    }
+  }
+}
+
+// Baked 8x8 chip blit (1:1, no rescale). Falls back to downscaling the full
+// sprite if a mini wasn't generated for this operator.
+function spriteMini(key,ox,oy){
+  const px=MINIS[key]||MINIS['UNKNOWN'];
+  if(!px){spriteScaled(key,ox,oy,MINI_SIZE);return;}
+  for(let y=0;y<MINI_SIZE;y++){
+    for(let x=0;x<MINI_SIZE;x++){
+      const c=px[y*MINI_SIZE+x];
       if(c&&c!=='#000000'){cx.fillStyle=c;cx.fillRect(ox+x,oy+y,1,1);}
     }
   }
@@ -223,8 +243,8 @@ function drawBoard(ships, animT){
   }
 }
 function drawRow(s,y){
-  // funnel chip (8px), code, dir, name, age right-aligned
-  spriteScaled(s.op,0,y+1,8);
+  // funnel chip (8px, baked mini), code, dir, name, age right-aligned
+  spriteMini(s.op,0,y+1);
   txt(s.code,10,y+2,C.code);
   dirGlyph(s.dir,29,y+2);
   // name fills the middle; age right-aligned, name clipped before it
@@ -420,6 +440,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers(); self.wfile.write(payload)
         elif self.path == "/" or self.path == "/index.html":
             page = (PAGE.replace("%SPRITES%", json.dumps(SPRITES_HEX))
+                        .replace("%MINIS%", json.dumps(MINIS_HEX))
                         .replace("%SPRITE_SIZE%", str(SPRITE_SIZE))
                         .replace("%FONT%", json.dumps(FONT)))
             self.send_response(200)
