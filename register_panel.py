@@ -33,7 +33,7 @@ import re
 import socketserver
 import threading
 
-PORT = 8080
+PORT = 8000
 CAPTURE_DIR = "captures"
 _latest = {"ts": 0, "bright": 128, "closed": False, "hours": 18, "ships": []}
 _lock = threading.Lock()
@@ -111,6 +111,18 @@ def load_font(path="font5x7.js"):
 FONT = load_font()
 
 
+def load_emmett_data(path="emmett_panel_data.json"):
+    """Lakes map + icon sprites + placement for the Where's-Emmett frame.
+    Optional: if the file is absent the panel simply never shows the frame."""
+    try:
+        return json.load(open(path))
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+EMMETT_DATA = load_emmett_data()
+
+
 def rgb565_to_hex(c):
     r = (c >> 11) & 0x1F
     g = (c >> 5) & 0x3F
@@ -139,6 +151,7 @@ const MINIS = %MINIS%;
 const MINI_SIZE = 8;
 const SPRITE_SIZE = %SPRITE_SIZE%;
 const FONT = %FONT%;
+const EMMETT = %EMMETT%;
 const W=128, H=64;
 const C={name:'#ffc828',label:'#5a8cff',value:'#e6e6e6',dim:'#6e6e6e',accent:'#3cdc78',
          code:'#9ad0ff'};
@@ -325,7 +338,162 @@ function drawRiverLine(progress, home, dir, y){
   }
 }
 
-// ---- Mode controller --------------------------------------------------------
+// ---- EMMETT mode: "Where's Emmett" Great Lakes tracker ---------------------
+// Ported from the Python reference renderer. Draws green land + lakes, the
+// home icons (cherries/mai tai) always, one port landmark icon when it's the
+// AIS destination or the nearest port in range, 1px port dots, Emmett's live
+// position dot, and a detail box (lake / nav / SOG / distance to Traverse City).
+const E_MAP_OX=0, E_MAP_OY=7;
+const E_COL={
+  base:'#688e32', alt:'#60842e', dark:'#3c5c22',
+  water:'#4a8ec8', coast:'#2c583c',
+  dot:'#ff3c28', dothl:'#ffc878',
+  boxFill:'#0a0e0c', boxEdge:'#96af8c', halo:'#46553c',
+  portMark:'#ffeb78',
+  tHead:'#6ec878', tMain:'#d2dccd', tDim:'#96aa96', tStale:'#c8965a'
+};
+let _eWaterSet=null, _eLakeOf=null;
+function eWaterSet(){
+  if(!_eWaterSet){
+    _eWaterSet=new Set(); for(const p of EMMETT.water) _eWaterSet.add(p[0]+','+p[1]);
+    _eLakeOf=EMMETT.lake_of;
+  }
+  return _eWaterSet;
+}
+function eLL2XY(lon,lat){
+  const p=EMMETT.proj, W=EMMETT.w, Hh=EMMETT.h;
+  const fx=(lon-p.lon_min)/(p.lon_max-p.lon_min);
+  const fy=(p.lat_max-lat)/(p.lat_max-p.lat_min);
+  return [Math.round(fx*(W-1)), Math.round(fy*(Hh-1))];
+}
+function ePut(x,y,c){ if(x>=0&&x<W&&y>=0&&y<H){ cx.fillStyle=c; cx.fillRect(x,y,1,1);} }
+function eHaversineMi(la1,lo1,la2,lo2){
+  const R=3958.7613, rad=Math.PI/180;
+  const dp=(la2-la1)*rad, dl=(lo2-lo1)*rad;
+  const a=Math.sin(dp/2)**2+Math.cos(la1*rad)*Math.cos(la2*rad)*Math.sin(dl/2)**2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(a)));
+}
+function eLakeName(lon,lat){
+  eWaterSet();
+  const [wx,wy]=eLL2XY(lon,lat);
+  for(let r=0;r<=4;r++){
+    let best=null,bd=1e9;
+    for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==r) continue;
+      const nm=_eLakeOf[(wx+dx)+','+(wy+dy)];
+      if(nm&&nm!=='?'){ const d=dx*dx+dy*dy; if(d<bd){bd=d;best=nm;} }
+    }
+    if(best) return best;
+  }
+  return '?';
+}
+function eNavLabel(nav,sog){
+  const NAV={0:'UNDERWAY',1:'ANCHORED',2:'NOT UNDER CMD',3:'RESTRICTED',
+    4:'DRAFT LIMITED',5:'MOORED',6:'AGROUND',7:'FISHING',8:'SAILING',15:'UNDEFINED'};
+  const moving=(sog!=null&&sog>0.5);
+  let label=(nav!=null)?NAV[nav]:null;
+  if(moving&&(label==null||label==='MOORED'||label==='ANCHORED'||label==='UNDEFINED')) return 'UNDERWAY';
+  if(!moving&&(label==null||label==='UNDERWAY'||label==='UNDEFINED')) return 'STOPPED';
+  return label||(moving?'UNDERWAY':'STOPPED');
+}
+function eActivePort(e){
+  // destination match first
+  if(e.dest){
+    const up=e.dest.toUpperCase();
+    for(const k in EMMETT.ports){
+      for(const kw of EMMETT.ports[k].kw){ if(up.indexOf(kw)>=0) return k; }
+    }
+  }
+  // nearest within 60 mi
+  let best=null,bd=1e9;
+  for(const k in EMMETT.ports){
+    const ll=EMMETT.ports[k].ll;
+    const d=eHaversineMi(e.lat,e.lon,ll[0],ll[1]);
+    if(d<bd){bd=d;best=k;}
+  }
+  return bd<=60?best:null;
+}
+function eDrawIcon(key,ax,ay){
+  const off=EMMETT.offsets[key]; if(!off) return;
+  const [ox,oy]=off.off;
+  const cells=EMMETT.icons[key];
+  // halo: exterior 8-neighbours of the silhouette
+  const occ=new Set(); for(const c of cells) occ.add(c[0]+','+c[1]);
+  const halo=new Set();
+  for(const c of cells){
+    for(let hx=-1;hx<=1;hx++)for(let hy=-1;hy<=1;hy++){
+      const k=(c[0]+hx)+','+(c[1]+hy);
+      if(!occ.has(k)) halo.add(k);
+    }
+  }
+  for(const k of halo){ const [dx,dy]=k.split(',').map(Number);
+    ePut(E_MAP_OX+ax+ox+dx, E_MAP_OY+ay+oy+dy, E_COL.halo); }
+  for(const c of cells){ ePut(E_MAP_OX+ax+ox+c[0], E_MAP_OY+ay+oy+c[1], c[2]); }
+}
+function drawEmmett(e){
+  if(!EMMETT||!e) return;
+  eWaterSet();
+  const W2=EMMETT.w, H2=EMMETT.h, p=EMMETT.proj;
+  // green dithered field (stable pattern)
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    // cheap deterministic dither matching the python seed feel
+    const r=((x*73856093)^(y*19349663))>>>0;
+    if((r%83)===0) ePut(x,y,E_COL.dark);
+    else if(((x+y)&1)) ePut(x,y,E_COL.alt);
+    else ePut(x,y,E_COL.base);
+  }
+  // water + coast
+  for(const pt of EMMETT.water) ePut(E_MAP_OX+pt[0], E_MAP_OY+pt[1], E_COL.water);
+  for(const pt of EMMETT.water){
+    const x=pt[0],y=pt[1];
+    const nb=[[1,0],[-1,0],[0,1],[0,-1]];
+    for(const d of nb){ if(!_eWaterSet.has((x+d[0])+','+(y+d[1]))){ ePut(E_MAP_OX+x,E_MAP_OY+y,E_COL.coast); break; } }
+  }
+  // home icons always + one active port icon
+  const show=new Set(EMMETT.home_icons);
+  const port=eActivePort(e); if(port) show.add(port);
+  for(const key of show){
+    const off=EMMETT.offsets[key]; if(!off) continue;
+    const [ax,ay]=eLL2XY(off.ll[0],off.ll[1]); eDrawIcon(key,ax,ay);
+  }
+  // port dots (1px)
+  for(const key in EMMETT.offsets){
+    if(EMMETT.home_icons.indexOf(key)>=0) continue;
+    const off=EMMETT.offsets[key]; const [ax,ay]=eLL2XY(off.ll[0],off.ll[1]);
+    ePut(E_MAP_OX+ax,E_MAP_OY+ay,E_COL.portMark);
+  }
+  // Emmett position dot (if in window)
+  const inWin=(e.lon>=p.lon_min&&e.lon<=p.lon_max&&e.lat>=p.lat_min&&e.lat<=p.lat_max);
+  if(inWin){
+    const [dx,dy]=eLL2XY(e.lon,e.lat);
+    for(const a of [[1,0],[-1,0],[0,1],[0,-1]]) ePut(E_MAP_OX+dx+a[0],E_MAP_OY+dy+a[1],E_COL.dothl);
+    ePut(E_MAP_OX+dx,E_MAP_OY+dy,E_COL.dot);
+  }
+  // title chip
+  eBox(1,0,30,8,E_COL.boxFill,'#b4c8aa'); txt('EMMETT',3,1,'#dce6d2');
+  // detail box (upper-right, clears Erie/Ontario)
+  const BX=62,BY=0,BW=W-62,BH=29;
+  eBox(BX,BY,BW,BH,E_COL.boxFill,E_COL.boxEdge);
+  const tx=BX+4;
+  const lake=eLakeName(e.lon,e.lat);
+  const lakeDisp=(lake!=='?')?lake:'AT SEA';
+  const nav=eNavLabel(e.navstat,e.sog);
+  const sogDisp=(e.sog!=null)?(e.sog.toFixed(1)+' KN'):'-- KN';
+  const dist=eHaversineMi(e.lat,e.lon,EMMETT.home.lat,EMMETT.home.lon);
+  const distDisp=EMMETT.home.name+' '+Math.round(dist)+'MI';
+  txt(lakeDisp,tx,BY+2,E_COL.tHead);
+  txt(nav,tx,BY+9,E_COL.tMain);
+  txt(sogDisp,tx,BY+16,E_COL.tDim);
+  txt(distDisp,tx,BY+22,E_COL.tMain);
+}
+function eBox(x,y,w,h,fill,edge){
+  for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++){
+    const isEdge=(xx===x||xx===x+w-1||yy===y||yy===y+h-1);
+    cx.fillStyle=isEdge?edge:fill; cx.fillRect(xx,yy,1,1);
+  }
+}
+
+
 // BOARD shown long enough to complete a full scroll, then DETAIL cycles through
 // the NAMED ships (ghosts stay on the board but get no solo card), then back.
 const DETAIL_MS=5000;
@@ -347,13 +515,24 @@ function render(f,animT){
   // Only named ships get detail cards; ghosts (MMSI-only) stay on the board.
   const named=ships.filter(s=>s.name && s.name.indexOf('MMSI ')!==0);
   const boardMs=boardCycleMs(n);
-  const cycle=boardMs + named.length*DETAIL_MS;
+  // Emmett frame joins the rotation only when the service sends a fresh fix.
+  const EMMETT_MS=6000;
+  const hasEmmett=!!(EMMETT && f.emmett);
+  const emmettMs=hasEmmett?EMMETT_MS:0;
+  const cycle=boardMs + named.length*DETAIL_MS + emmettMs;
   const p=animT%cycle;
-  if(n===0 || named.length===0 || p<boardMs){
+  if(p < boardMs && (n>0 || !hasEmmett)){
     drawBoard(ships,animT);
+  }else if(p < boardMs + named.length*DETAIL_MS){
+    if(named.length===0){ drawBoard(ships,animT); }
+    else{
+      const idx=Math.floor((p-boardMs)/DETAIL_MS)%named.length;
+      drawDetail(named[idx],animT);
+    }
+  }else if(hasEmmett){
+    drawEmmett(f.emmett);
   }else{
-    const idx=Math.floor((p-boardMs)/DETAIL_MS)%named.length;
-    drawDetail(named[idx],animT);
+    drawBoard(ships,animT);
   }
   cv.style.opacity=(0.25+0.75*(f.bright/255)).toFixed(2);
 }
@@ -442,7 +621,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             page = (PAGE.replace("%SPRITES%", json.dumps(SPRITES_HEX))
                         .replace("%MINIS%", json.dumps(MINIS_HEX))
                         .replace("%SPRITE_SIZE%", str(SPRITE_SIZE))
-                        .replace("%FONT%", json.dumps(FONT)))
+                        .replace("%FONT%", json.dumps(FONT))
+                        .replace("%EMMETT%", json.dumps(EMMETT_DATA)))
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers(); self.wfile.write(page.encode())

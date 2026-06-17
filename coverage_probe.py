@@ -50,7 +50,9 @@ if sys.platform.startswith("win"):
 
 WS_URL = "wss://stream.aisstream.io/v0/stream"
 # Same outer reach as the services: Cape Vincent -> Montreal.
-BOUNDING_BOX = [[[44.10, -76.40], [45.3237, -73.9132]]]
+#BOUNDING_BOX = [[[44.10, -76.40], [45.3237, -73.9132]]]
+BOUNDING_BOX = [[[41.0, -93.0], [49.5, -73.0]]]
+
 # Reference point for distances -- Clayton, NY, near the American Narrows.
 REF_LAT, REF_LON = 44.224, -76.086
 

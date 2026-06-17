@@ -18,6 +18,7 @@ import csv
 import http.server
 import json
 import os
+import re
 import socketserver
 import sys
 from collections import defaultdict
@@ -34,7 +35,33 @@ except Exception:
 PORT = int(os.environ.get("STATS_PORT", "8090"))
 PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "passages.csv").strip()
 FUN_STATS = os.environ.get("FUN_STATS", "fun_stats.json").strip()
+MMSI_DB = os.environ.get("MMSI_DB", "mmsi_db.json").strip()
 DEMO = False                       # set by --demo; serves built-in sample data
+
+# Read-time name healing. A passage row freezes the vessel name at the crossing
+# instant; if the AIS static (Type 5) message hadn't arrived yet, the name is
+# stored as "MMSI <n>". register_service.py records each vessel's real name in
+# mmsi_db.json as soon as it learns it, so we resolve placeholders against that
+# map here -- the same read-time pattern used for operators -- without ever
+# rewriting passages.csv.
+_MMSI_NAME_RE = re.compile(r"^MMSI\s+(\d+)$")
+
+
+def _load_name_map(path):
+    out = {}
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for k, rec in data.items():
+                nm = (rec.get("name") or "").strip() if isinstance(rec, dict) else ""
+                if nm:
+                    out[str(k).strip()] = nm
+    except Exception:
+        pass
+    return out
 
 
 def load_fun_stats():
@@ -85,20 +112,27 @@ def load_passages():
             rows = list(csv.DictReader(f))
     except Exception:
         return rows
-    # Fill in/refresh the operator from the ship's name using current rules, so
-    # leaderboards reflect what we know now -- not what was known at crossing
-    # time. A real name that still resolves to UNKNOWN is left as-is.
-    if _ops is not None:
-        for r in rows:
-            name = (r.get("name") or "").strip()
-            if not name or name.upper().startswith("MMSI "):
-                continue
-            try:
-                op = _ops.operator_for(0, name)
-            except Exception:
-                continue
-            if op and op != "UNKNOWN":
-                r["operator"] = op
+    # Heal "MMSI <n>" placeholder names from mmsi_db, then fill in/refresh the
+    # operator from the (now real) name using current rules -- so leaderboards
+    # reflect what we know now, not what was known at crossing time. The name
+    # map is reloaded each request, so a ship named since the last poll heals
+    # on the next one. A real name that still resolves to UNKNOWN is left as-is.
+    name_map = _load_name_map(MMSI_DB)
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        m = _MMSI_NAME_RE.match(name)
+        if m:
+            real = name_map.get(m.group(1))
+            if real:
+                r["name"] = name = real
+        if _ops is None or not name or _MMSI_NAME_RE.match(name):
+            continue
+        try:
+            op = _ops.operator_for(0, name)
+        except Exception:
+            continue
+        if op and op != "UNKNOWN":
+            r["operator"] = op
     return rows
 
 
@@ -143,6 +177,23 @@ def totals(rows):
     }
 
 
+def busiest_day(rows):
+    """The single day with the most passages in `rows`, computed live (not from
+    fun_stats.json, so it stays current). Returns {date, count, ships} or None.
+    `count` is total crossings that day; `ships` lists the distinct vessels."""
+    by_day = defaultdict(list)
+    for r in rows:
+        day = (r.get("pass_time", "") or "")[:10]
+        if day:
+            by_day[day].append(r)
+    if not by_day:
+        return None
+    # Most crossings wins; ties broken by the most recent date.
+    day, day_rows = max(by_day.items(), key=lambda kv: (len(kv[1]), kv[0]))
+    ships = sorted({(r.get("name") or "").strip() for r in day_rows if r.get("name")})
+    return {"date": day, "count": len(day_rows), "ships": ships}
+
+
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <title>Ship Wall &mdash; passages</title>
 <meta name=viewport content="width=device-width, initial-scale=1">
@@ -184,6 +235,7 @@ async function load(){
 function renderTabs(){
   const t=document.getElementById('tabs');
   const tabs=[['current','This year ('+DATA.current_year+')'],
+              ['recent','Recent'],
               ['lifetime','Lifetime'],
               ['history','By year']];
   if(DATA.fun) tabs.push(['fun','Hall of Fame']);
@@ -228,13 +280,32 @@ function dirLabel(d){
   if(d==='upbound') return '<span class=up>&#9650; upbound</span>';
   return '<span style="color:#6e7b8c">&mdash;</span>';
 }
+function busiestBlock(b, year){
+  if(!b) return '';
+  const ships=(b.ships&&b.ships.length)
+    ? '<div style="color:#9aa7b6;line-height:1.7;margin-top:6px">'+
+      b.ships.map(esc).join(' &middot; ')+'</div>'
+    : '';
+  return '<h2>Busiest day of '+year+' so far</h2>'+
+    '<div class=tot><div><b>'+b.count+'</b><span>passages on '+fmtDay(b.date)+'</span></div>'+
+    '<div><b>'+(b.ships?b.ships.length:0)+'</b><span>distinct vessels</span></div></div>'+
+    ships;
+}
+function renderRecent(c){
+  const v=DATA.current;
+  let h=busiestBlock(v.busiest, DATA.current_year);
+  const rt=recentTable(v.recent);
+  h+= rt || '<div class=empty>No recent passages.</div>';
+  c.innerHTML=h;
+}
 function render(){
   const c=document.getElementById('content');
   if(VIEW==='current'){
     const v=DATA.current;
     c.innerHTML='<h2>'+DATA.current_year+' season</h2>'+totsBlock(v.totals)+
-      '<h2>Most frequent this year</h2>'+leaderboardTable(v.leaderboard)+
-      recentTable(v.recent);
+      '<h2>Most frequent this year</h2>'+leaderboardTable(v.leaderboard);
+  } else if(VIEW==='recent'){
+    renderRecent(c);
   } else if(VIEW==='lifetime'){
     const v=DATA.lifetime;
     c.innerHTML='<h2>All-time ('+DATA.years[DATA.years.length-1]+'&ndash;'+DATA.years[0]+')</h2>'+
@@ -344,7 +415,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "current_year": cur_year,
                 "years": years,
                 "current": {"totals": totals(cur_rows),
-                            "leaderboard": cur_lb, "recent": cur_recent},
+                            "leaderboard": cur_lb, "recent": cur_recent,
+                            "busiest": busiest_day(cur_rows)},
                 "lifetime": {"totals": totals(rows),
                              "leaderboard": life_lb, "recent": life_recent},
                 "by_year": by_year,

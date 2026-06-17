@@ -55,7 +55,7 @@ if not API_KEY:
 # HTTP-POSTed to ESP32_HOST (used by the browser mock). Serial takes priority.
 ESP32_SERIAL = os.environ.get("ESP32_SERIAL", "").strip()
 SERIAL_BAUD = int(os.environ.get("ESP32_BAUD", "115200"))
-ESP32_HOST = os.environ.get("ESP32_HOST", "localhost:8080")
+ESP32_HOST = os.environ.get("ESP32_HOST", "localhost:8000")
 ESP32_URL = f"http://{ESP32_HOST}/frame"
 
 if sys.platform.startswith("win"):
@@ -92,6 +92,25 @@ PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "").strip()
 # moment its position arrives -- no waiting for this session's static message,
 # and far fewer "ghost" entries over time.
 MMSI_DB_PATH = os.environ.get("MMSI_DB", "").strip()
+
+# --- Emmett: persistent single-vessel track of the USEPA Lake Guardian --------
+# A separate AISStream subscription (global bbox + MMSI filter) follows one ship
+# anywhere on the Lakes and feeds the "Where's Emmett" panel frame. It must be a
+# SECOND websocket: AISStream subscriptions are swap-and-replace, so adding the
+# MMSI filter to the main box subscription would restrict the whole register to
+# this one vessel. Set EMMETT_MMSI="" to disable the feature entirely.
+EMMETT_MMSI = os.environ.get("EMMETT_MMSI", "338021074").strip()
+EMMETT_STALE_SECS = float(os.environ.get("EMMETT_STALE_SECS", "1800"))  # 30 min
+# Debug: set EMMETT_IGNORE_STALE=1 to always show the frame once any fix exists,
+# regardless of age (useful when testing with sparse/old positions).
+EMMETT_IGNORE_STALE = os.environ.get("EMMETT_IGNORE_STALE", "") not in ("", "0", "false", "False")
+# A box that fully contains the Great Lakes + St. Lawrence. We deliberately do
+# NOT use a whole-world box: AISStream has shown "subscription accepted but no
+# data" behavior with global boxes, and Emmett never leaves the Lakes anyway.
+# The MMSI filter still pins the single vessel; the box just has to contain it.
+EMMETT_GLOBAL_BOX = [[[41.0, -93.0], [49.5, -73.0]]]
+# latest fix, shared between the emmett task and build_frame()
+_emmett_state = {}
 
 # --- Ship type + nav status + country (mirrors the live service) -------------
 SHIP_TYPES = {
@@ -213,15 +232,29 @@ _passage_header_written = False
 _logged_passages = set()
 
 
-def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after):
-    global _passage_header_written
-    # Estimate the pass time by linear interpolation to the home crossing.
+def _passage_pass_time(t_before, p_before, t_after, p_after):
+    """Epoch of the interpolated HOME_PROGRESS crossing between two sightings.
+    This is the physically meaningful crossing instant -- and the single day
+    that BOTH the live guard and the startup backfill must key their de-dupe on,
+    so a crossing whose `seen_after` rolls past midnight isn't logged twice."""
     span = (p_after - p_before)
     if span != 0:
         frac = (HOME_PROGRESS - p_before) / span
-        t_pass = t_before + frac * (t_after - t_before)
-    else:
-        t_pass = (t_before + t_after) / 2
+        return t_before + frac * (t_after - t_before)
+    return (t_before + t_after) / 2
+
+
+def _passage_key(mmsi, t_pass, direction):
+    """De-dupe key shared by every passage write path: one crossing per ship,
+    per crossing-day, per direction."""
+    day = _dt.datetime.fromtimestamp(t_pass).date().isoformat()
+    return (str(mmsi), day, direction)
+
+
+def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after):
+    global _passage_header_written
+    # Estimate the pass time by linear interpolation to the home crossing.
+    t_pass = _passage_pass_time(t_before, p_before, t_after, p_after)
     row = {
         "pass_time": _dt.datetime.fromtimestamp(t_pass).isoformat(timespec="seconds"),
         "mmsi": mmsi,
@@ -273,8 +306,11 @@ def check_passage(mmsi, lat, lon, observed, name, op):
     # De-dupe: one logged crossing per ship per day per direction. Without this,
     # a ship that lingers or whose position jitters across HOME_PROGRESS logs the
     # same passage over and over (creeping seen_after, same seen_before).
-    day = _dt.datetime.fromtimestamp(observed).date().isoformat()
-    key = (str(mmsi), day, direction)
+    # Key on the *interpolated crossing* day -- not `observed` (= seen_after),
+    # which can roll past midnight and disagree with the day the backfill keys
+    # on, letting a restart re-log the same crossing.
+    t_pass = _passage_pass_time(t_prev, p_prev, observed, p)
+    key = _passage_key(mmsi, t_pass, direction)
     if key in _logged_passages:
         return
     _logged_passages.add(key)
@@ -479,6 +515,43 @@ def _eligible(tc):
     return True
 
 
+# --- Tour-boat filtering -----------------------------------------------------
+# The Thousand Islands day-tour fleet broadcasts passenger ship type (60-69),
+# the same as genuine through-transit cruise ships, so type alone can't tell
+# them apart. We drop the known local tour boats by MMSI, always keep a named
+# allowlist of cruise ships, and otherwise gate passenger vessels by length --
+# tour boats are well under PASSENGER_MIN_LOA metres, cruise ships well over.
+TOUR_BOAT_MMSI = {
+    316048074,
+    316015867,
+    368185710,
+    316035873,
+    316048072,
+    316048073,
+    316048071,
+}
+CRUISE_ALLOW_MMSI = set()     # genuine through-transit cruise ships to always keep
+PASSENGER_MIN_LOA = 60        # metres; tour boats are under, cruise ships over
+
+
+def _passenger_ok(v):
+    """For passenger-type vessels (AIS type 60-69), decide whether to keep.
+    Drops the known Thousand Islands tour fleet (by MMSI) and any passenger
+    vessel shorter than PASSENGER_MIN_LOA; always keeps the cruise allowlist.
+    Non-passenger vessels never reach here -- see the call in build_frame."""
+    mmsi = v.get("mmsi")
+    try:
+        mmsi = int(mmsi)
+    except (TypeError, ValueError):
+        return True               # can't identify it; don't filter
+    if mmsi in TOUR_BOAT_MMSI:
+        return False
+    if mmsi in CRUISE_ALLOW_MMSI:
+        return True
+    loa = v.get("length") or 0    # update_static stores A+B here
+    return loa >= PASSENGER_MIN_LOA   # unknown length (0) -> dropped
+
+
 def age_string(secs):
     """Compact age for the board: 'now', '12m', '2h', '14h'."""
     m = int(secs // 60)
@@ -646,12 +719,98 @@ def log_vessel(mmsi, v, op, code, flag):
         print(f"[log] could not write {VESSEL_LOG}: {e}")
 
 
+def _emmett_summary():
+    """Build the 'emmett' frame field from the latest fix, or None if we have no
+    fresh fix (panel skips the frame when this is absent). Pure data -- the panel
+    does all rendering. Includes which port landmark icon to light up (the AIS
+    destination if recognized, else the nearest port within range)."""
+    st = _emmett_state
+    lat, lon = st.get("lat"), st.get("lon")
+    ts = st.get("ts")
+    if lat is None or lon is None or not ts:
+        return None
+    if not EMMETT_IGNORE_STALE and (time.time() - ts) > EMMETT_STALE_SECS:
+        return None
+    return {
+        "lat": lat, "lon": lon,
+        "sog": st.get("sog"),
+        "cog": st.get("cog"),
+        "navstat": st.get("navstat"),
+        "dest": st.get("dest"),
+        "name": st.get("name"),
+        "age_secs": int(time.time() - ts),
+    }
+
+
+async def emmett_task():
+    """Own AISStream websocket following just EMMETT_MMSI, anywhere on the Lakes.
+    Updates _emmett_state. Self-healing; isolated from the main feed and from
+    passage detection."""
+    if not EMMETT_MMSI:
+        return
+    sub = {
+        "APIKey": API_KEY,
+        "BoundingBoxes": EMMETT_GLOBAL_BOX,
+        "FiltersShipMMSI": [EMMETT_MMSI],
+        "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
+    }
+    static = {"name": "USEPA LAKE GUARDIAN", "dest": None}
+    while True:
+        try:
+            async with websockets.connect(WS_URL, ping_interval=20) as ws:
+                await ws.send(json.dumps(sub))
+                print(f"[emmett] following MMSI {EMMETT_MMSI}")
+                async for raw in ws:
+                    try:
+                        msg = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    mtype = msg.get("MessageType")
+                    body = msg.get("Message", {}) or {}
+                    if mtype == "ShipStaticData":
+                        sd = body.get("ShipStaticData", {}) or {}
+                        nm = (sd.get("Name") or "").strip()
+                        if nm:
+                            static["name"] = nm
+                        dest = (sd.get("Destination") or "").strip()
+                        if dest:
+                            static["dest"] = dest
+                        continue
+                    if mtype != "PositionReport":
+                        continue
+                    pr = body.get("PositionReport", {}) or {}
+                    meta = msg.get("MetaData", {}) or {}
+                    lat = pr.get("Latitude", meta.get("latitude"))
+                    lon = pr.get("Longitude", meta.get("longitude"))
+                    if lat is None or lon is None:
+                        continue
+                    sog = pr.get("Sog"); cog = pr.get("Cog")
+                    nav = pr.get("NavigationalStatus")
+                    _emmett_state.update({
+                        "lat": float(lat), "lon": float(lon),
+                        "sog": (float(sog) if sog is not None and sog < 102.3 else None),
+                        "cog": (float(cog) if cog is not None and cog < 360 else None),
+                        "navstat": (int(nav) if nav is not None else None),
+                        "name": static["name"], "dest": static["dest"],
+                        "ts": time.time(),
+                    })
+        except Exception as e:
+            print(f"[emmett] connection lost ({e}); reconnecting in 8s")
+            await asyncio.sleep(8)
+
+
 def build_frame():
     prune()
     now = time.time()
-    eligible = [v for v in vessels.values()
-                if _eligible(v.get("type_code"))
-                and (v.get("lat") is not None or v.get("name"))]
+    def _keep(v):
+        tc = v.get("type_code")
+        if not _eligible(tc):
+            return False
+        # passenger types (60-69): drop tour boats, keep cruise ships
+        if tc is not None and 60 <= tc <= 69 and not _passenger_ok(v):
+            return False
+        return v.get("lat") is not None or v.get("name")
+    eligible = [v for v in vessels.values() if _keep(v)]
     # Named ships first (most-recent within that group), then nameless
     # MMSI-only fragments at the bottom. has_name=0 sorts before has_name=1;
     # negative time sorts newest-first within each group.
@@ -700,6 +859,7 @@ def build_frame():
         "hours": RETAIN_HOURS,
         "home": HOME_PROGRESS,
         "ships": ships,
+        "emmett": _emmett_summary(),     # None when no fresh fix -> panel skips
     }
 
 
@@ -793,6 +953,7 @@ async def subscribe():
     }
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(pusher(session))
+        asyncio.create_task(emmett_task())     # separate MMSI websocket for Emmett
         while True:
             try:
                 async with websockets.connect(WS_URL, ping_interval=20) as ws:
@@ -803,6 +964,23 @@ async def subscribe():
             except Exception as e:
                 print(f"[ais] connection lost ({e}); reconnecting in 5s")
                 await asyncio.sleep(5)
+
+
+def _seed_logged_passages_from_disk():
+    """Prime the live de-dupe guard with every crossing already in PASSAGE_LOG,
+    so live detection won't re-log a crossing after a restart. Runs every boot,
+    independent of whether the track-walk backfill runs. Keys on pass_time's day
+    -- the same crossing-day key the live guard and backfill use."""
+    if not PASSAGE_LOG or not os.path.exists(PASSAGE_LOG):
+        return
+    try:
+        with open(PASSAGE_LOG, newline="") as f:
+            for row in _csv.DictReader(f):
+                _logged_passages.add((row.get("mmsi", ""),
+                                      row.get("pass_time", "")[:10],
+                                      row.get("direction", "")))
+    except Exception:
+        pass
 
 
 def _backfill_passages_from_register():
@@ -818,18 +996,7 @@ def _backfill_passages_from_register():
         return
 
     # already-logged crossings, to avoid double-logging
-    have = set()
-    if os.path.exists(PASSAGE_LOG):
-        try:
-            with open(PASSAGE_LOG, newline="") as f:
-                for row in _csv.DictReader(f):
-                    have.add((row.get("mmsi", ""), row.get("pass_time", "")[:10],
-                              row.get("direction", "")))
-        except Exception:
-            pass
-    # Prime the live de-dupe guard with everything already on disk, so live
-    # detection won't re-log a crossing that's already recorded after a restart.
-    _logged_passages.update(have)
+    have = set(_logged_passages)
 
     # gather each vessel's time-sorted (epoch, progress, name, op) sightings
     tracks = {}
@@ -873,14 +1040,13 @@ def _backfill_passages_from_register():
                 direction = "upbound"
             if not direction:
                 continue
-            t_pass_iso = _dt.datetime.fromtimestamp(
-                t0 + ((HOME_PROGRESS - p0) / (p1 - p0) if p1 != p0 else 0.5)
-                * (t1 - t0)).isoformat(timespec="seconds")
-            if (str(mmsi), t_pass_iso[:10], direction) in have:
+            t_pass = _passage_pass_time(t0, p0, t1, p1)
+            key = _passage_key(mmsi, t_pass, direction)
+            if key in have:
                 continue
             _log_passage(mmsi, name, op or "UNKNOWN", direction, t0, p0, t1, p1)
-            have.add((str(mmsi), t_pass_iso[:10], direction))
-            _logged_passages.add((str(mmsi), t_pass_iso[:10], direction))
+            have.add(key)
+            _logged_passages.add(key)
             added += 1
     if added:
         print(f"[backfill] recovered {added} passage(s) from the register "
@@ -900,5 +1066,6 @@ if __name__ == "__main__":
     _seed_log_from_existing()
     load_mmsi_db()
     _seed_vessels_from_register()
+    _seed_logged_passages_from_disk()     # prime de-dupe guard from existing log
     _backfill_passages_from_register()    # recover any crossings missed while down
     asyncio.run(subscribe())
