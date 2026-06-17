@@ -347,11 +347,13 @@ def _dir_for(v):
 # mmsi -> merged dict; "last" is the most recent sighting time (AIS observation
 # time when available, else local receive time).
 #
-# NOTE: we subscribe to PositionReport + ShipStaticData only -- these are the
-# Class A messages broadcast by big commercial ships (lakers, salties), which
-# is exactly the traffic this wall is about. Smaller craft (some tugs, pleasure
-# boats) transmit Class B (Standard/ExtendedClassBPositionReport), which we
-# deliberately do NOT request, to keep the register to big ships.
+# NOTE: PositionReport + ShipStaticData are the Class A messages broadcast by
+# big commercial ships (lakers, salties) -- exactly the traffic this wall is
+# about. We ALSO request Class B position reports (Standard/Extended) and Class
+# B static (StaticDataReport), but only so a tiny MMSI allowlist (CLASS_B_ALLOW)
+# of interesting small craft -- tall ships, sail-training schooners -- can get
+# through. Every other Class B vessel (pleasure boats, harbour launches) is
+# dropped in handle_message before it ever enters the register.
 vessels = {}
 
 
@@ -530,8 +532,25 @@ TOUR_BOAT_MMSI = {
     316048073,
     316048071,
 }
-CRUISE_ALLOW_MMSI = set()     # genuine through-transit cruise ships to always keep
+CRUISE_ALLOW_MMSI = {         # genuine through-transit cruise ships / tall ships to always keep
+    316006946,   # Fair Jeanne (sailing)
+    316225000,   # Empire Sandy (passenger, 61m)
+    303615000,   # Pride of Baltimore II (sailing)
+    316017581,   # TS Playfair (sailing)
+    367351490,   # Appledore IV (passenger, Class B)
+}
 PASSENGER_MIN_LOA = 60        # metres; tour boats are under, cruise ships over
+
+# Class B transponders are deliberately NOT in the main subscription (see the
+# NOTE above the websocket loop) -- almost all Class B traffic is pleasure boats
+# and harbour launches we don't want. But a few interesting vessels (small tall
+# ships, sail-training schooners) only carry Class B. We open the subscription
+# to Class B message types and then immediately drop any Class B vessel whose
+# MMSI isn't on this allowlist, keeping the firehose closed to everything else.
+CLASS_B_ALLOW = {
+    367351490,   # Appledore IV
+    316017581,   # TS Playfair (if she ever shows as Class B)
+}
 
 
 def _passenger_ok(v):
@@ -922,6 +941,54 @@ def handle_message(msg):
         return
     observed = parse_time_utc(meta)        # AIS observation time, not receive time
     body = msg.get("Message", {})
+
+    # Class B: the subscription lets these through, but we only keep an explicit
+    # allowlist of interesting small craft (tall ships, sail-training schooners).
+    # Everything else Class B (pleasure boats, launches) is dropped here.
+    if mtype in ("StandardClassBPositionReport",
+                 "ExtendedClassBPositionReport",
+                 "StaticDataReport"):
+        try:
+            if int(mmsi) not in CLASS_B_ALLOW:
+                return
+        except (TypeError, ValueError):
+            return
+        if mtype == "StandardClassBPositionReport":
+            pr = body.get("StandardClassBPositionReport", {}) or {}
+            if MMSI_DB_PATH and str(mmsi) in mmsi_db and not vessels.get(mmsi, {}).get("name"):
+                db_prefill(mmsi)
+            update_position(mmsi, pr, observed)
+            if PASSAGE_LOG:
+                v = vessels.get(mmsi, {})
+                op = operator_for(mmsi, v.get("name"))
+                check_passage(mmsi, pr.get("Latitude"), pr.get("Longitude"),
+                              observed, v.get("name"), op)
+        elif mtype == "ExtendedClassBPositionReport":
+            pr = body.get("ExtendedClassBPositionReport", {}) or {}
+            update_position(mmsi, pr, observed)
+            # Extended Class B also carries Name/Type/Dimension -- feed the
+            # static fields through the same path as Class A static data.
+            update_static(mmsi, pr, observed)
+            if MMSI_DB_PATH:
+                v = vessels.get(mmsi, {})
+                op = operator_for(mmsi, v.get("name"))
+                db_upsert(mmsi, v, op, operator_code(op), country_for(mmsi))
+        else:  # StaticDataReport (msg 24, Part A name + Part B type/dimension)
+            sd = body.get("StaticDataReport", {}) or {}
+            # AISStream nests Part A / Part B; flatten whichever is present onto
+            # the keys update_static expects (Name, Type, Dimension).
+            flat = dict(sd)
+            for part_key in ("ReportA", "ReportB"):
+                part = sd.get(part_key)
+                if isinstance(part, dict):
+                    flat.update(part)
+            update_static(mmsi, flat, observed)
+            if MMSI_DB_PATH:
+                v = vessels.get(mmsi, {})
+                op = operator_for(mmsi, v.get("name"))
+                db_upsert(mmsi, v, op, operator_code(op), country_for(mmsi))
+        return
+
     if mtype == "PositionReport":
         pr = body.get("PositionReport", {})
         # If we know this MMSI from a past session, seed its identity now so it
@@ -949,7 +1016,11 @@ async def subscribe():
     sub = {
         "APIKey": API_KEY,
         "BoundingBoxes": BOUNDING_BOX,
-        "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
+        "FilterMessageTypes": [
+            "PositionReport", "ShipStaticData",
+            "StandardClassBPositionReport", "ExtendedClassBPositionReport",
+            "StaticDataReport",
+        ],
     }
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(pusher(session))

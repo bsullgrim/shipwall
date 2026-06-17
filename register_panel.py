@@ -367,6 +367,35 @@ function eLL2XY(lon,lat){
   return [Math.round(fx*(W-1)), Math.round(fy*(Hh-1))];
 }
 function ePut(x,y,c){ if(x>=0&&x<W&&y>=0&&y<H){ cx.fillStyle=c; cx.fillRect(x,y,1,1);} }
+
+// Compact 3x5 font, scoped to the Emmett frame so we can pack more info than the
+// panel's 5x7 font allows. Each glyph is 5 rows of a 3-bit mask (bit0=left).
+const E_FONT={
+ 'A':[2,5,7,5,5],'B':[6,5,6,5,6],'C':[3,4,4,4,3],'D':[6,5,5,5,6],'E':[7,4,6,4,7],
+ 'F':[7,4,6,4,4],'G':[3,4,5,5,3],'H':[5,5,7,5,5],'I':[7,2,2,2,7],'J':[1,1,1,5,2],
+ 'K':[5,6,4,6,5],'L':[4,4,4,4,7],'M':[5,7,7,5,5],'N':[5,7,7,7,5],'O':[2,5,5,5,2],
+ 'P':[6,5,6,4,4],'Q':[2,5,5,3,1],'R':[6,5,6,6,5],'S':[3,4,2,1,6],'T':[7,2,2,2,2],
+ 'U':[5,5,5,5,3],'V':[5,5,5,2,2],'W':[5,5,7,7,5],'X':[5,5,2,5,5],'Y':[5,5,2,2,2],
+ 'Z':[7,1,2,4,7],
+ '0':[2,5,5,5,2],'1':[2,6,2,2,7],'2':[6,1,2,4,7],'3':[6,1,2,1,6],'4':[5,5,7,1,1],
+ '5':[7,4,6,1,6],'6':[3,4,6,5,2],'7':[7,1,2,2,2],'8':[2,5,2,5,2],'9':[2,5,3,1,6],
+ '.':[0,0,0,0,2],'-':[0,0,7,0,0],':':[0,2,0,2,0],' ':[0,0,0,0,0],'/':[1,1,2,4,4],
+ '?':[6,1,2,0,2]
+};
+const E_GW=3, E_GADV=4, E_GH=5;
+function eGlyph(ch,x,y,col){
+  const g=E_FONT[ch]||E_FONT['?'];
+  cx.fillStyle=col;
+  for(let r=0;r<E_GH;r++){ const bits=g[r];
+    for(let c=0;c<E_GW;c++){ if(bits&(1<<(E_GW-1-c))) cx.fillRect(x+c,y+r,1,1); } }
+}
+function eTxt(s,x,y,col,maxX){
+  let gx=x; s=String(s).toUpperCase();
+  for(const ch of s){ if(maxX&&gx+E_GW>maxX) break; eGlyph(ch,gx,y,col); gx+=E_GADV; }
+  return gx;
+}
+function eTxtW(s){ return String(s).length*E_GADV-1; }
+
 function eHaversineMi(la1,lo1,la2,lo2){
   const R=3958.7613, rad=Math.PI/180;
   const dp=(la2-la1)*rad, dl=(lo2-lo1)*rad;
@@ -469,22 +498,23 @@ function drawEmmett(e){
     for(const a of [[1,0],[-1,0],[0,1],[0,-1]]) ePut(E_MAP_OX+dx+a[0],E_MAP_OY+dy+a[1],E_COL.dothl);
     ePut(E_MAP_OX+dx,E_MAP_OY+dy,E_COL.dot);
   }
-  // title chip
-  eBox(1,0,30,8,E_COL.boxFill,'#b4c8aa'); txt('EMMETT',3,1,'#dce6d2');
-  // detail box (upper-right, clears Erie/Ontario)
-  const BX=62,BY=0,BW=W-62,BH=29;
+  // title chip (3x5 font: EMMETT = 6*4-1 = 23px)
+  eBox(0,0,29,7,E_COL.boxFill,'#b4c8aa'); eTxt('EMMETT',3,1,'#dce6d2');
+  // detail box: compact, back to the mock proportions. Left edge clears Huron,
+  // bottom clears Erie/Ontario. 3x5 font fits ~14 chars per line here.
+  const BX=62,BY=0,BW=W-BX,BH=29;
   eBox(BX,BY,BW,BH,E_COL.boxFill,E_COL.boxEdge);
-  const tx=BX+4;
+  const tx=BX+3, maxX=W-2;
   const lake=eLakeName(e.lon,e.lat);
   const lakeDisp=(lake!=='?')?lake:'AT SEA';
   const nav=eNavLabel(e.navstat,e.sog);
   const sogDisp=(e.sog!=null)?(e.sog.toFixed(1)+' KN'):'-- KN';
   const dist=eHaversineMi(e.lat,e.lon,EMMETT.home.lat,EMMETT.home.lon);
-  const distDisp=EMMETT.home.name+' '+Math.round(dist)+'MI';
-  txt(lakeDisp,tx,BY+2,E_COL.tHead);
-  txt(nav,tx,BY+9,E_COL.tMain);
-  txt(sogDisp,tx,BY+16,E_COL.tDim);
-  txt(distDisp,tx,BY+22,E_COL.tMain);
+  const distDisp='TVC '+Math.round(dist)+'MI';
+  eTxt(lakeDisp,tx,BY+3,E_COL.tHead,maxX);
+  eTxt(nav,tx,BY+9,E_COL.tMain,maxX);
+  eTxt(sogDisp,tx,BY+15,E_COL.tDim,maxX);
+  eTxt(distDisp,tx,BY+21,E_COL.tMain,maxX);
 }
 function eBox(x,y,w,h,fill,edge){
   for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++){
