@@ -43,9 +43,14 @@ static uint8_t clockPin   = 2;
 static uint8_t latchPin   = 47;
 static uint8_t oePin      = 14;
 
-// width, bit-depth(6), chain(1), rgbPins, 5 addr pins, clk, latch, oe, double-buffer
+// width, bit-depth, chain(1), rgbPins, 5 addr pins, clk, latch, oe, double-buffer
+// Bit depth 5 (not 6): on the S3 driving 128 wide, depth 6 drops the refresh
+// rate enough that dim colors visibly shimmer. Depth 5 roughly doubles the
+// headroom for a steady image; the color loss is negligible for these sprites.
+// If text still shimmers, try 4. If sprites look posterized, you have room to
+// go back toward 6 only if the refresh stays high enough to look steady.
 Adafruit_Protomatter matrix(
-  PANEL_W, 6, 1, rgbPins, 5, addrPins, clockPin, latchPin, oePin, true);
+  PANEL_W, 5, 1, rgbPins, 5, addrPins, clockPin, latchPin, oePin, true);
 
 // ---- Serial frame reader ----------------------------------------------------
 // Worst case ~30 ships + emmett ~= 6-8 KB/line. Size generously; a truncated
