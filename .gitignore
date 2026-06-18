@@ -10,9 +10,9 @@ unknown_vessels.json
 ships.csv
 ships*.csv
 #register.csv
-register*.csv
+#register*.csv
 #passages.csv
-passages*.csv
+#passages*.csv
 #mmsi_database.json
 #ship_to_operator.json
 coverage_stations.csv
