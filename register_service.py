@@ -531,6 +531,14 @@ TOUR_BOAT_MMSI = {
     316048072,
     316048073,
     316048071,
+    # Montreal / harbour excursion fleet seen in unknown_vessels.json
+    316013357,   # AML Cavalier Maxim
+    316017490,   # Navark Arcadia
+    316047059,   # Navark XL5
+    316053378,   # Navark Atlantis
+    316035908,   # Le Bateau Mouche II
+    316048649,   # Ida M II
+    316005167,   # Kawartha Voyageur
 }
 CRUISE_ALLOW_MMSI = {         # genuine through-transit cruise ships / tall ships to always keep
     316006946,   # Fair Jeanne (sailing)
@@ -698,15 +706,43 @@ def _seed_vessels_from_register():
               f"from {VESSEL_LOG} (positions may be stale until they re-report)")
 
 
+def _good(x):
+    """A genuinely-resolved name/operator value (not a placeholder)."""
+    return bool(x) and x not in ("UNKNOWN", "???", "")
+
+
 def log_vessel(mmsi, v, op, code, flag):
     if not VESSEL_LOG:
         return
     global _log_header_written
     name = v.get("name") or ""
-    sig = (name, op)
-    if _logged.get(mmsi) == sig:
-        return
-    first_seen = mmsi not in _logged
+
+    # Only log when the BEST-KNOWN identity for this MMSI genuinely advances.
+    # AIS interleaves named static reports with nameless position reports, so a
+    # ship oscillates name -> "" -> name and its operator flickers UNKNOWN as a
+    # nameless ping arrives. Storing the latest signature naively re-logs every
+    # flip and balloons register.csv. Instead, carry forward the best name/op we
+    # already have and emit a row only when it actually improves -- a new ship, a
+    # name resolving, or a real name/operator change. (Same reasoning as
+    # clean_register.py, applied live so the file never needs that cleanup pass.)
+    prev = _logged.get(mmsi)
+    if prev is not None:
+        pname, pop = prev
+        eff_name = name if name else pname              # nameless never downgrades
+        eff_op   = op if _good(op) else (pop if _good(pop) else op)
+        sig = (eff_name, eff_op)
+        if sig == prev:
+            return                                       # no real advance -> skip
+        # The row we write should reflect the effective (carried-forward) identity,
+        # not the momentary nameless/UNKNOWN ping that triggered this call.
+        name = eff_name
+        if eff_op != op:
+            op = eff_op
+            code = operator_code(op)
+        first_seen = False
+    else:
+        sig = (name, op)
+        first_seen = True
     _logged[mmsi] = sig
     row = {
         "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),

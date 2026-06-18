@@ -1,0 +1,20 @@
+# /etc/systemd/system/shipwall-clean.service
+#
+# One-shot: collapse register.csv churn so the service's startup reads
+# (warm-start, log-seed, passage backfill) stay fast as seasons accumulate.
+# Triggered by shipwall-clean.timer; not enabled on its own.
+#
+# Safe-by-design: writes to a temp file, validates it's non-empty and has more
+# than just a header, then atomically swaps it in. A failed clean leaves the
+# original register.csv untouched.
+
+[Unit]
+Description=Compact Ship Wall register.csv
+After=shipwall.service
+
+[Service]
+Type=oneshot
+# Runs as root so it can stop/start shipwall.service around the atomic swap.
+# It only touches files under /home/grims/shipwall and calls systemctl.
+WorkingDirectory=/home/grims/shipwall
+ExecStart=/home/grims/shipwall/clean_register.sh

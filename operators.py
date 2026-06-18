@@ -29,13 +29,12 @@ OPERATOR_CODES = {
     "ANDRIE": "AND", "CLIFFS": "CLF", "G3": "G3", "GLF": "GLF",
     "HOLCIM": "HOL", "MCASPHALT": "MCA", "NACC": "NAC", "VTB": "VTB",
     # Added from the ship-log analysis, ranked by how often they're seen.
-    # These keys resolve via ship_to_operator.json now; sprites are TODO
-    # (build them in this priority order -- see ship_to_operator.json header).
     "MCKEIL": "MCK", "WAGENBORG": "WGB", "POLSTEAM": "POL",
-    "CANFORNAV": "CFN", "NMBULGARE": "NMB", "SPLIETHOFF": "SPL",
+    "CALFORNAV": "CFN", "NMBULGARE": "NMB", "SPLIETHOFF": "SPL",
     "BRIESE": "BRS", "CCG": "CCG", "GRANATH": "GRA", "CARISBROOKE": "CAR",
-    "TBMARINE": "TBM", "COASTAL": "CST", "GROUPEOCEAN": "OCN",
+    "TBMARINE": "TBM", "COASTAL": "CST", "GROUPOCEAN": "OCN",
     "NEAS": "NEA", "BIGLIFT": "BLF", "RCN": "RCN",
+    "USESPA": "EPA",
     "UNKNOWN": "???",
 }
 

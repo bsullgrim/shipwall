@@ -1,0 +1,20 @@
+# /etc/systemd/system/shipwall-clean.timer
+#
+# Run the register compaction monthly. Install:
+#   sudo cp shipwall-clean.{service,timer} /etc/systemd/system/
+#   sudo cp clean_register.sh /home/grims/shipwall/ && chmod +x /home/grims/shipwall/clean_register.sh
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now shipwall-clean.timer
+#   systemctl list-timers shipwall-clean   # confirm next run
+
+[Unit]
+Description=Monthly Ship Wall register compaction
+
+[Timer]
+# 04:30 on the 1st of each month -- quiet hours, Seaway traffic minimal.
+OnCalendar=*-*-01 04:30:00
+# If the Pi was off at the scheduled time, run once it's back up.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

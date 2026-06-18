@@ -1,0 +1,53 @@
+# /etc/systemd/system/shipwall.service
+#
+# St. Lawrence Ship Wall -- AIS ingestion + panel feeder.
+# Keeps register_service.py running unattended: restarts on crash, on bad
+# network, and on boot (cottage power blips). Install:
+#
+#   sudo cp shipwall.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now shipwall.service
+#   journalctl -u shipwall -f          # watch logs live (works over Tailscale SSH)
+#
+# Edit User, WorkingDirectory, the env vars, and ExecStart paths to match the Pi.
+
+[Unit]
+Description=St. Lawrence Ship Wall AIS service
+# Wait for the network to be up before connecting to AISStream.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grims
+WorkingDirectory=/home/grims/shipwall
+
+# --- Configuration (edit to match your setup) -------------------------------
+Environment=AISSTREAM_KEY=PUT_YOUR_KEY_HERE
+Environment=REGISTER_HOURS=18
+Environment=REGISTER_LOG=/home/grims/shipwall/register.csv
+Environment=PASSAGE_LOG=/home/grims/shipwall/passages.csv
+Environment=ESP32_SERIAL=/dev/ttyACM0
+Environment=EMMETT_MMSI=338021074
+# If you run the mock HTTP panel instead of serial, drop ESP32_SERIAL and set:
+# Environment=ESP32_URL=http://127.0.0.1:5000/frame
+
+ExecStart=/usr/bin/python3 /home/grims/shipwall/register_service.py
+
+# --- Resilience -------------------------------------------------------------
+Restart=always
+RestartSec=8
+# If it crash-loops faster than this, back off instead of hammering.
+StartLimitIntervalSec=120
+StartLimitBurst=6
+
+# Serial device access: the 'grims' user must be in the 'dialout' group:
+#   sudo usermod -aG dialout grims   (then re-login)
+# Or grant the service access explicitly:
+SupplementaryGroups=dialout
+
+# Don't kill the service for transient OOM; let it restart cleanly.
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target
