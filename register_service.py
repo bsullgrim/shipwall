@@ -874,6 +874,15 @@ def build_frame():
         return (has_name, -v.get("last", 0))
     eligible.sort(key=sort_key)
 
+    # Cap the number of ships SENT TO THE PANEL (not logged). The display shows
+    # 6 board rows and cycles detail cards; it doesn't need the whole register.
+    # Unbounded ship counts produced frames large enough to overflow the panel's
+    # line buffer, which silently dropped every frame (intermittent "PI OFFLINE"
+    # on busy days). Logging below still covers every eligible vessel, so register
+    # and passage history are unaffected. The sort puts named, most-recent vessels
+    # first, so the panel keeps the most relevant ones.
+    MAX_PANEL_SHIPS = 20
+
     ships = []
     for v in eligible:
         mmsi = v["mmsi"]
@@ -882,7 +891,9 @@ def build_frame():
             log_unknown(mmsi, v.get("name"))
         code = operator_code(op)
         flag = country_for(mmsi)
-        log_vessel(mmsi, v, op, code, flag)
+        log_vessel(mmsi, v, op, code, flag)        # log ALL eligible vessels
+        if len(ships) >= MAX_PANEL_SHIPS:
+            continue                                # but only send the top N to the panel
         age = now - v.get("last", now)
         ships.append({
             "mmsi": mmsi,
