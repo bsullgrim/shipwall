@@ -952,6 +952,10 @@ _serial_port = None
 
 
 def _open_serial():
+    """Try to open the serial port. Returns True on success, False on failure.
+    A missing/closed port is NOT fatal -- the panel may be briefly unplugged or
+    re-enumerating; the pusher retries on its next cycle. Only a missing pyserial
+    install is fatal (a config error, not a transient one)."""
     global _serial_port
     try:
         import serial  # pyserial
@@ -961,20 +965,31 @@ def _open_serial():
     try:
         _serial_port = serial.Serial(ESP32_SERIAL, SERIAL_BAUD, timeout=1)
         print(f"[serial] open {ESP32_SERIAL} @ {SERIAL_BAUD}")
+        return True
     except Exception as e:
-        print(f"[serial] could not open {ESP32_SERIAL}: {e}")
-        sys.exit(1)
+        print(f"[serial] could not open {ESP32_SERIAL}: {e} (will retry)")
+        _serial_port = None
+        return False
 
 
 async def pusher(session):
+    global _serial_port
     if ESP32_SERIAL:
-        _open_serial()
+        _open_serial()                 # may fail; we retry below, never fatal
     while True:
         await asyncio.sleep(PUSH_INTERVAL)
         frame = build_frame()
         n = len(frame["ships"])
         save_mmsi_db()             # persist any new identities (no-op if unchanged)
         if ESP32_SERIAL:
+            # If the port isn't open (panel unplugged / re-enumerating), try to
+            # reopen and skip this cycle rather than crashing. The panel holds its
+            # last frame and shows WAITING after its own timeout; when the port
+            # comes back we resume automatically.
+            if _serial_port is None:
+                if not _open_serial():
+                    print(f"[push] serial not available; will retry in {PUSH_INTERVAL}s")
+                    continue
             # Newline-delimited JSON: one frame per line, '\n'-terminated.
             try:
                 line = (json.dumps(frame, separators=(",", ":")) + "\n").encode()
@@ -985,12 +1000,14 @@ async def pusher(session):
                           f"({em['age_secs']}s)") if em else "emmett=None"
                 print(f"[push] {n} ships -> serial {ESP32_SERIAL}  [{emflag}]")
             except Exception as e:
-                print(f"[push] serial write failed: {e}; reopening")
+                # Transient write failure (unplug, USB reset). Close and let the
+                # next cycle reopen -- do NOT exit the process.
+                print(f"[push] serial write failed: {e}; will reopen next cycle")
                 try:
                     _serial_port.close()
                 except Exception:
                     pass
-                _open_serial()
+                _serial_port = None
         else:
             try:
                 async with session.post(ESP32_URL, json=frame, timeout=5) as resp:
