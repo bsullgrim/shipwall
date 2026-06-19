@@ -47,15 +47,18 @@ Live variant:
 
 Register variant:
 - `register_service.py` — AIS subscriber keeping an N-hour sightings register.
-- `register_panel.py` — browser stand-in with BOARD + DETAIL modes.
+- `register_panel.py` — browser stand-in with BOARD + DETAIL modes; the
+  **reference renderer** the firmware is matched against.
 - `register_simulate.py` — synthetic register for the panel, no AIS key needed.
-- `register_esp32.ino` — firmware renderer *(planned; mock is the reference)*.
+- `register_esp32.ino` — firmware renderer **(serial; matched to the mock)**.
 
 Data & diagnostics:
 - `mmsi_database.json` — persistent MMSI → identity store the service grows
   from static AIS messages (name/operator/type/dimensions). Lets known vessels
   be identified the moment their position arrives, instead of appearing as
-  ghosts. Set `MMSI_DB=mmsi_database.json` to enable.
+  ghosts. Set `MMSI_DB=mmsi_database.json` to enable. **The env var is
+  `MMSI_DB`; the file is `mmsi_database.json` — set the path to the file or the
+  database silently won't load (and warm-seed / name resolution go dark).**
 - `seed_mmsi_db.py` — bootstrap that database from an existing register CSV, so
   it starts populated with everything seen so far (operators re-resolved via
   current rules).
@@ -100,8 +103,15 @@ the LED grid, deepens blacks, gives the "screen" look).
 
 Notes:
 - The **6484 panel uses 5-address (ABCDE) multiplexing** — fine on the
-  MatrixPortal S3, but the firmware must be configured for it (1/32 scan,
-  5-address), not the 4-address default, or the image is scrambled.
+  MatrixPortal S3, but the firmware must drive five address pins (A–E). A
+  4-address (A–D) configuration leaves the panel **completely dark** (not
+  scrambled — dark), because half the scan rows are never addressed. This was
+  the single biggest gotcha bringing the panel up.
+- These 6484 panels are remainder factory stock and **batches vary**: ours had
+  its **red and blue channels swapped** relative to the Adafruit reference
+  pinout. If reds show as blue (and blue as red) with green/white correct, swap
+  R↔B in the firmware's `rgbPins[]` (see firmware section). Confirm with a
+  pure-R/G/B/white swatch test before assuming sprite data is wrong.
 - The panel kit **includes its IDC ribbon and 4-pin power cable** — no need to
   buy those.
 - A monolithic 128×64 needs **no chaining** — one ribbon to the MatrixPortal,
@@ -125,26 +135,35 @@ frame data and the MatrixPortal's logic power.
 ```
 
 **Connections:**
-- Panel IDC ribbon → MatrixPortal HUB75 connector (plug-in, keyed).
+- Panel IDC ribbon → MatrixPortal HUB75 connector (plug-in, keyed). Use the
+  panel's **J-IN** header, not the output side.
 - Panel 4-pin power → 5V/4A supply via the barrel jack + screw terminal.
 - MatrixPortal USB-C → Pi USB-A (data + MatrixPortal power).
 - Pi powered from its own 5V/2.5A micro-USB supply.
+- Tie the panel-supply ground to a MatrixPortal GND so the HUB75 signals share
+  a reference.
 
 **One wall plug:** feed both the panel's 5V/4A supply and the Pi's 5V/2.5A
 supply from a small power strip — that strip's plug is your single wall outlet.
 (Don't power the panel from the Pi or the MatrixPortal; it needs its own 5 V.)
 
-**Firmware note:** the MatrixPortal renders over USB serial, not WiFi. Configure
-the panel as 128×64, 1/32 scan, **5-address (ADDX_E)** in the
-`ESP32-HUB75-MatrixPanel-DMA` setup, and read frames as newline-delimited JSON
-from the USB serial port.
+**Firmware note:** the MatrixPortal renders over USB serial, not WiFi. The
+register firmware uses the **Adafruit Protomatter** library configured for
+128×64, 1/32 scan, **5 address pins (A–E)**, and reads newline-delimited JSON
+frames from USB serial at 115200 baud. (See the firmware section for why
+Protomatter rather than the DMA library.)
 
 ---
 
 ## Pi-side setup
 
 1. Free API key at https://aisstream.io.
-2. Install deps: `pip install websockets aiohttp pillow pyserial`
+2. Install deps (a venv is recommended on current Raspberry Pi OS, which marks
+   the system Python "externally managed"):
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/pip install websockets aiohttp pillow pyserial
+   ```
 3. Copy `.env.example` to `.env` and add your key (`.env` is gitignored).
 4. Run **one** of the services. On hardware, point it at the MatrixPortal's USB
    serial device; for the browser mock, point it at the mock's HTTP host:
@@ -158,7 +177,8 @@ from the USB serial port.
    ```
    (The live variant works the same way with `shipwall_service.py`.) The Pi's
    serial device is usually `/dev/ttyACM0` for the MatrixPortal; check with
-   `ls /dev/ttyACM*` after plugging it in.
+   `ls /dev/ttyACM*` after plugging it in. Add the service user to the
+   `dialout` group so it can open the port without root.
 
 Both subscribe to the same outer box (Cape Vincent → Snell/Beauharnois lock),
 hard-coded near the top of each service:
@@ -172,20 +192,36 @@ also has an inner box (the American Narrows) feeding its detail cards.
 
 ## MatrixPortal (ESP32) setup
 
-1. Arduino IDE → Boards Manager → install **esp32** by Espressif; select
-   *Adafruit MatrixPortal ESP32-S3* as the board.
-2. Library Manager → install `ESP32-HUB75-MatrixPanel-DMA` and `ArduinoJson`.
-3. In the `.ino`, configure the panel: **128×64, 1/32 scan, 5-address
-   (ADDX_E)** — the 6484 is a non-standard 5-address panel; the 4-address
-   default renders scrambled.
-4. No WiFi config needed — the firmware reads newline-delimited JSON frames
-   from **USB serial** at 115200 baud.
-5. Flash, then plug the MatrixPortal's USB-C into the Pi and start the service
-   with `ESP32_SERIAL=/dev/ttyACM0`.
+The register firmware is `register_esp32.ino`, a USB-serial renderer matched to
+the `register_panel.py` mock.
 
-*(The register firmware `register_esp32.ino` is the serial renderer for this
-build; the live `shipwall_esp32.ino` is the older WiFi/HTTP renderer, kept for
-the archive.)*
+1. Toolchain — Arduino IDE or `arduino-cli`. Install **esp32** by Espressif and
+   select *Adafruit MatrixPortal ESP32-S3* as the board.
+2. Libraries — install **`Adafruit Protomatter`**, **`Adafruit GFX Library`**,
+   and **`ArduinoJson`** (v7). Protomatter is the library Adafruit validates
+   for the 6484 + MatrixPortal S3 combo; it handles the 5-address scan this
+   panel needs. (The older `ESP32-HUB75-MatrixPanel-DMA` library defaulted to
+   4-address and left the panel dark — Protomatter is the reliable path here.)
+3. The panel is configured in the `Adafruit_Protomatter` constructor at the top
+   of the `.ino`: width 128, **5 address pins (A–E)**, and the MatrixPortal S3
+   `rgbPins`/`clockPin`/`latchPin`/`oePin`. Note nothing renders until
+   `matrix.show()` is called — the firmware does this once per frame.
+4. **Color order:** if reds appear blue (greens/whites fine), this panel has R↔B
+   swapped; the firmware's `rgbPins` already swaps them for our unit
+   (`{40,41,42, 37,39,38}` rather than the stock `{42,41,40, 38,39,37}`). Flip
+   back if your panel renders correctly with the stock order.
+5. Flash with the native-USB CDC flag so the serial port survives reflashing:
+   ```bash
+   FQBN="esp32:esp32:adafruit_matrixportal_esp32s3:CDCOnBoot=cdc"
+   arduino-cli compile --fqbn "$FQBN" register_esp32.ino
+   arduino-cli upload  --fqbn "$FQBN" -p /dev/ttyACM0 register_esp32.ino
+   ```
+   (Windows/PowerShell: `$FQBN = "..."`, reference as `$FQBN`, port is `COMx`.)
+6. No WiFi config — the firmware reads newline-delimited JSON frames from USB
+   serial at 115200. Start the service with `ESP32_SERIAL=/dev/ttyACM0`.
+
+*(The live `shipwall_esp32.ino` is the older WiFi/HTTP renderer, kept for the
+archive.)*
 
 ---
 
@@ -205,15 +241,22 @@ first; up to 7 rows.
 
 *BOARD.* A departure-board list, one line per ship: a small funnel color-chip,
 the operator's 3-letter code, a direction arrow, the ship name, and how long
-ago it was seen. Scrolls vertically when the list overflows. Most-recent first.
+ago it was seen. Scrolls vertically when the list overflows (holds top/bottom,
+scrolls between). Most-recent first.
 
-*DETAIL.* One ship at a time, full screen: the large 32×32 funnel plus the rich
-AIS fields — type + flag, dimensions (e.g. `225x24m`), draught, navigation
-status, destination + ETA, last-seen age — and a **river progress line** along
-the bottom showing where the ship is between Lake Ontario and the lock, with
-Danger Island marked as a fixed reference. Only *named* ships get a detail card;
+*DETAIL.* One ship at a time, full screen: the name across the top with a
+direction glyph, the large 32×32 funnel top-left, the rich AIS fields beside and
+below it — type + flag, dimensions (e.g. `225x24m`), draught, navigation status,
+destination + ETA, last-seen age — and a **river progress line** along the
+bottom showing where the ship is between Lake Ontario and the lock, with Danger
+Island marked as a fixed reference. Only *named* ships get a detail card;
 unidentified "ghost" vessels stay on the board but don't get a solo card. Cycles
 through the named ships, then returns to the board. Missing fields are omitted.
+
+*EMMETT.* A "Where's Emmett" frame tracking the USEPA Lake Guardian (its own
+filtered AIS subscription over the Great Lakes). Shown only when a recent fix
+exists (within `EMMETT_STALE_SECS`, default 1800 s); set `EMMETT_IGNORE_STALE=1`
+to force it for testing.
 
 ### Shared display behavior
 
@@ -225,14 +268,21 @@ a dim grey dash (rather than a misleading arrow or anchor).
 
 **Brightness (sun-based, no extra hardware).** `schedule.py` computes sunrise/
 sunset for the reach and ramps over 30 min at dawn/dusk — bright by day, ~11%
-glow overnight. The Pi stamps the target into each frame; the ESP32 obeys.
+glow overnight. The Pi stamps the target into each frame. *Note:* Protomatter
+has no runtime brightness control, so the register firmware currently renders at
+a fixed depth and the `bright` field is carried but not applied; dimming would
+require scaling pixel colors at draw time.
 
-**Idle / status screens.** Boot splash, a ready screen, "WAITING / for data" if the
-Pi stops pushing for 60 s, and "SEAWAY CLOSED / reopens March" during the
-winter closure (shown only when the reach is also empty).
+**Idle / status screens.** A "STARTING UP" splash on cold boot (before the first
+frame), "WAITING / for data" if the Pi stops pushing for 60 s, and "SEAWAY
+CLOSED / reopens March" during the winter closure (shown only when the reach is
+also empty).
 
 **Power behavior.** The ESP32 holds no important state — every frame carries
 everything. Pull power and restore it and the wall repopulates within seconds.
+On a shared-power reboot the panel boots in ~1 s and shows STARTING UP; the Pi
+takes 30–90 s (on a Pi 3) to boot, start the service, connect, and warm-start,
+then the panel goes live on its own.
 
 ---
 
@@ -251,13 +301,10 @@ AIS name/MMSI ──> operators.py ──> operator key ──> frame ──> re
 `mmsi_to_operator.json` lookup, then vessel-name rules (Algoma → "ALGO", CSL →
 "CSL"/"BAIE", Fednav → "FEDERAL", Desgagnés by substring, etc.). Unmatched
 vessels return `UNKNOWN` (shown as a ghost sprite) and are appended to
-`unknown_vessels.json` to classify later.
-
-Operator keys with sprites: `ALGOMA CSL FEDNAV ASC INTERLAKE LOWERLAKES
-DESGAGNES ANDRIE CLIFFS G3 GLF HOLCIM MCASPHALT NACC VTB`, plus `UNKNOWN`.
-Several (Andrie, Cliffs, G3, GLF, Holcim, McAsphalt, NACC, VTB) have **no name
-pattern** and only resolve via `mmsi_to_operator.json` — populate that table
-from observed sightings (the register's CSV log is good seed data).
+`unknown_vessels.json` to classify later. Operator keys are spelled to match the
+sprite table in `ship_sprites.h` (e.g. `CALFORNAV`, `GROUPOCEAN`, `USESPA`);
+the JSON resolvers must use those exact spellings or a real sprite shows as the
+ghost.
 
 **Building sprites from photos.** Drop a funnel image in `funnels/` (transparent
 PNG works best), map it in `funnels/config.json`, and run:
@@ -279,7 +326,9 @@ UNKNOWN (ghost) sprites are hand-authored directly in `ship_sprites.h`; a
 Each variant has a browser mock that impersonates the ESP32 (same `POST /frame`
 endpoint, draws to a canvas at http://localhost:8080 using the real
 `ship_sprites.h`). Run the matching pair — **the mock and service/simulator
-must be from the same variant**, since their frame formats differ.
+must be from the same variant**, since their frame formats differ. The register
+mock (`register_panel.py`) is also the reference the firmware layout is matched
+against, pixel position for pixel position.
 
 Live variant:
 ```bash
@@ -319,7 +368,9 @@ AISSTREAM_KEY=... ESP32_SERIAL=/dev/ttyACM0 python3 register_service.py
   the vessel's course and speed (`cog`/`sog`), making it the best seed for
   `seed_mmsi_db.py`. On restart the service warm-starts the display from this
   file *and* primes passage detection's memory, so the board isn't empty and a
-  crossing that straddles a restart still logs.
+  crossing that straddles a restart still logs. All eligible vessels are logged
+  even though the panel display is capped to the most-recent ~20, so history is
+  complete regardless of what's on screen.
 - **`PASSAGE_LOG`** — vessels detected transiting Danger Island. There's no AIS
   coverage at the island itself, so a passage is inferred when a ship's position
   crosses the home point between two sightings (above→below = downbound, and
@@ -330,7 +381,8 @@ AISSTREAM_KEY=... ESP32_SERIAL=/dev/ttyACM0 python3 register_service.py
   specific file or date range.
 - **`MMSI_DB`** — the persistent identity database (see the file map). Grows as
   static messages resolve vessels; pre-fills known MMSIs on sight. Bootstrap it
-  from an existing register with `python3 seed_mmsi_db.py register.csv`.
+  from an existing register with `python3 seed_mmsi_db.py register.csv`. Point
+  it at `mmsi_database.json`.
 
 **Direction (downbound / upbound / moored / unknown).** Resolved from real
 course when the ship is reporting one; for a warm-started or older row with no
@@ -371,12 +423,46 @@ cp .env.example .env     # add your real key here
 file, so a systemd unit works without a `.env`. If a key lands in a commit,
 **rotate it** at aisstream.io — that's faster and safer than scrubbing history.
 
+The repo's `shipwall.service` ships with a placeholder
+(`AISSTREAM_KEY=PUT_YOUR_KEY_HERE`); the real key lives only in the deployed copy
+at `/etc/systemd/system/shipwall.service`, which is outside the repo. Keep it
+that way — never paste a real key into the tracked template.
+
+### Rotating the key
+
+If the key is ever exposed (committed, shared, pasted somewhere), rotate it.
+Creating a new key is not enough on its own — **revoke the old one** at
+aisstream.io, or the leaked key keeps working.
+
+1. At aisstream.io: create a new API key, then delete/revoke the old one.
+2. On the Pi, swap it into the deployed unit (replaces only that one line) and
+   restart:
+   ```bash
+   sudo sed -i 's/AISSTREAM_KEY=.*/AISSTREAM_KEY=YOUR_NEW_KEY/' /etc/systemd/system/shipwall.service
+   sudo systemctl daemon-reload
+   sudo systemctl restart shipwall.service
+   ```
+3. If you also keep a `.env` for manual runs, update it too (no sudo; it's in
+   your home dir):
+   ```bash
+   sed -i 's/AISSTREAM_KEY=.*/AISSTREAM_KEY=YOUR_NEW_KEY/' ~/shipwall/.env
+   ```
+4. Confirm it reconnected with the new key:
+   ```bash
+   journalctl -u shipwall -n 20 --no-pager   # expect the banner + "[ais] subscribed"
+   ```
+   Repeated `[ais] connection lost` or auth errors mean the key was pasted wrong
+   (stray space or partial copy) — re-run the `sed` with the correct key.
+
+Don't paste the new key into a chat, screenshot, or commit — the point of
+rotating is to get the secret *out* of exposed places.
+
 ---
 
 ## Run on boot (systemd)
 
 `/etc/systemd/system/shipwall.service` (swap the ExecStart for whichever
-variant you run):
+variant you run; point the Python at your venv if you used one):
 ```ini
 [Unit]
 Description=St. Lawrence Ship Wall
@@ -386,10 +472,12 @@ Wants=network-online.target
 [Service]
 Environment=AISSTREAM_KEY=your_key_here
 Environment=ESP32_SERIAL=/dev/ttyACM0
-Environment=REGISTER_LOG=/home/pi/shipwall/register.csv
-Environment=PASSAGE_LOG=/home/pi/shipwall/passages.csv
-Environment=MMSI_DB=/home/pi/shipwall/mmsi_database.json
-ExecStart=/usr/bin/python3 /home/pi/shipwall/register_service.py
+Environment=REGISTER_LOG=/home/grims/shipwall/register.csv
+Environment=PASSAGE_LOG=/home/grims/shipwall/passages.csv
+Environment=MMSI_DB=/home/grims/shipwall/mmsi_database.json
+ExecStart=/home/grims/shipwall/.venv/bin/python3 /home/grims/shipwall/register_service.py
+User=grims
+WorkingDirectory=/home/grims/shipwall
 Restart=always
 RestartSec=10
 
