@@ -591,7 +591,16 @@ def age_string(secs):
 
 # --- Long-run CSV logging (REGISTER_LOG=path.csv) ----------------------------
 _logged = {}                  # mmsi -> last-logged (name, op) signature
+_last_logged_at = {}          # mmsi -> epoch of that vessel's last CSV row
 _log_header_written = False
+
+# Also re-log a vessel's current position if this long since its last row, even
+# when its identity hasn't changed. Keeps each vessel's newest logged row fresh
+# enough that warm-start can re-seed ships that have been continuously present
+# (otherwise a steady ship's last identity-row ages past the retention window
+# and it won't seed on restart despite being live). One row per ship per
+# interval -- bounded, modest growth. Override with REGISTER_REFRESH_MINS.
+REGISTER_REFRESH_SECS = float(os.environ.get("REGISTER_REFRESH_MINS", "30")) * 60
 
 
 def _seed_log_from_existing():
@@ -613,6 +622,9 @@ def _seed_log_from_existing():
                 except ValueError:
                     continue
                 _logged[m] = (row.get("name", "") or "", row.get("operator", "") or "")
+                ts = _parse_iso(row.get("timestamp", ""))
+                if ts:                       # newest row per mmsi wins (file is chronological)
+                    _last_logged_at[m] = ts
                 n += 1
         _log_header_written = True   # file exists, header already present
         if n:
@@ -731,8 +743,13 @@ def log_vessel(mmsi, v, op, code, flag):
         eff_name = name if name else pname              # nameless never downgrades
         eff_op   = op if _good(op) else (pop if _good(pop) else op)
         sig = (eff_name, eff_op)
-        if sig == prev:
-            return                                       # no real advance -> skip
+        # Write if identity advanced OR if it's been long enough since this
+        # vessel's last row (periodic position refresh, so warm-start can re-seed
+        # a continuously-present ship instead of letting its last row age out).
+        last_at = _last_logged_at.get(mmsi, 0)
+        stale_refresh = (time.time() - last_at) >= REGISTER_REFRESH_SECS
+        if sig == prev and not stale_refresh:
+            return                                       # no advance, not yet due -> skip
         # The row we write should reflect the effective (carried-forward) identity,
         # not the momentary nameless/UNKNOWN ping that triggered this call.
         name = eff_name
@@ -744,6 +761,7 @@ def log_vessel(mmsi, v, op, code, flag):
         sig = (name, op)
         first_seen = True
     _logged[mmsi] = sig
+    _last_logged_at[mmsi] = time.time()
     row = {
         "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),
         "event": "first_seen" if first_seen else "updated",
