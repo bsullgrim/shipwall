@@ -189,7 +189,8 @@ Run through these in order:
       vessel you can identify (e.g. an Algoma laker) and confirm the funnel looks
       right — this is your real RGB565 color check.
 - [ ] **The board view lists ships** with mini chips, codes, direction glyphs.
-- [ ] **Direction glyphs make sense** — downbound vs upbound vs moored.
+- [ ] **Direction glyphs make
+ sense** — downbound vs upbound vs moored.
 - [ ] **EPA / Lake Guardian** (if MMSI 338021074 is live or seeded): confirm it
       resolves to the `USESPA` funnel, not the UNKNOWN ghost. (This validates the
       whole resolver→sprite chain we converged.)
