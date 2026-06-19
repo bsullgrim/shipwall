@@ -962,7 +962,10 @@ async def pusher(session):
                 line = (json.dumps(frame, separators=(",", ":")) + "\n").encode()
                 _serial_port.write(line)
                 _serial_port.flush()
-                print(f"[push] {n} ships -> serial {ESP32_SERIAL}")
+                em = frame.get("emmett")
+                emflag = (f"emmett@{em['lat']:.2f},{em['lon']:.2f} "
+                          f"({em['age_secs']}s)") if em else "emmett=None"
+                print(f"[push] {n} ships -> serial {ESP32_SERIAL}  [{emflag}]")
             except Exception as e:
                 print(f"[push] serial write failed: {e}; reopening")
                 try:
