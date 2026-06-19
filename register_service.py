@@ -815,61 +815,53 @@ def _emmett_summary():
     }
 
 
-async def emmett_task():
-    """Own AISStream websocket following just EMMETT_MMSI, anywhere on the Lakes.
-    Updates _emmett_state. Self-healing; isolated from the main feed and from
-    passage detection."""
-    if not EMMETT_MMSI:
+_emmett_static = {"name": "USEPA LAKE GUARDIAN", "dest": None}
+
+def _emmett_ingest(mtype, body, meta):
+    """Update _emmett_state from an Emmett message arriving on the main feed.
+    (Replaces the old separate websocket, which caused connection contention.)"""
+    body = body or {}
+    if mtype == "ShipStaticData":
+        sd = body.get("ShipStaticData", {}) or {}
+        nm = (sd.get("Name") or "").strip()
+        if nm:
+            _emmett_static["name"] = nm
+        dest = (sd.get("Destination") or "").strip()
+        if dest:
+            _emmett_static["dest"] = dest
         return
-    sub = {
-        "APIKey": API_KEY,
-        "BoundingBoxes": EMMETT_GLOBAL_BOX,
-        "FiltersShipMMSI": [EMMETT_MMSI],
-        "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
-    }
-    static = {"name": "USEPA LAKE GUARDIAN", "dest": None}
-    while True:
-        try:
-            async with websockets.connect(WS_URL, ping_interval=20) as ws:
-                await ws.send(json.dumps(sub))
-                print(f"[emmett] following MMSI {EMMETT_MMSI}")
-                async for raw in ws:
-                    try:
-                        msg = json.loads(raw)
-                    except (ValueError, TypeError):
-                        continue
-                    mtype = msg.get("MessageType")
-                    body = msg.get("Message", {}) or {}
-                    if mtype == "ShipStaticData":
-                        sd = body.get("ShipStaticData", {}) or {}
-                        nm = (sd.get("Name") or "").strip()
-                        if nm:
-                            static["name"] = nm
-                        dest = (sd.get("Destination") or "").strip()
-                        if dest:
-                            static["dest"] = dest
-                        continue
-                    if mtype != "PositionReport":
-                        continue
-                    pr = body.get("PositionReport", {}) or {}
-                    meta = msg.get("MetaData", {}) or {}
-                    lat = pr.get("Latitude", meta.get("latitude"))
-                    lon = pr.get("Longitude", meta.get("longitude"))
-                    if lat is None or lon is None:
-                        continue
-                    sog = pr.get("Sog"); cog = pr.get("Cog")
-                    nav = pr.get("NavigationalStatus")
-                    _emmett_state.update({
-                        "lat": float(lat), "lon": float(lon),
-                        "sog": (float(sog) if sog is not None and sog < 102.3 else None),
-                        "cog": (float(cog) if cog is not None and cog < 360 else None),
-                        "navstat": (int(nav) if nav is not None else None),
-                        "name": static["name"], "dest": static["dest"],
-                        "ts": time.time(),
-                    })
-        except Exception as e:
-            print(f"[emmett] connection lost ({e}); reconnecting in 8s")
-            await asyncio.sleep(8)
+    if mtype != "PositionReport":
+        return
+    pr = body.get("PositionReport", {}) or {}
+    meta = meta or {}
+    lat = pr.get("Latitude", meta.get("latitude"))
+    lon = pr.get("Longitude", meta.get("longitude"))
+    if lat is None or lon is None:
+        return
+    sog = pr.get("Sog"); cog = pr.get("Cog")
+    nav = pr.get("NavigationalStatus")
+    _emmett_state.update({
+        "lat": float(lat), "lon": float(lon),
+        "sog": (float(sog) if sog is not None and sog < 102.3 else None),
+        "cog": (float(cog) if cog is not None and cog < 360 else None),
+        "navstat": (int(nav) if nav is not None else None),
+        "name": _emmett_static["name"], "dest": _emmett_static["dest"],
+        "ts": time.time(),
+    })
+
+
+def _in_register_box(lat, lon):
+    """True if a point falls inside the St. Lawrence register bounding box.
+    BOUNDING_BOX is [[[lat_a, lon_a], [lat_b, lon_b]], ...] corner pairs."""
+    try:
+        lat = float(lat); lon = float(lon)
+    except (TypeError, ValueError):
+        return False
+    for corner_pair in BOUNDING_BOX:
+        (la1, lo1), (la2, lo2) = corner_pair
+        if min(la1, la2) <= lat <= max(la1, la2) and min(lo1, lo2) <= lon <= max(lo1, lo2):
+            return True
+    return False
 
 
 def build_frame():
@@ -952,6 +944,10 @@ _serial_port = None
 
 
 def _open_serial():
+    """Try to open the serial port. Returns True on success, False on failure.
+    A missing/closed port is NOT fatal -- the panel may be briefly unplugged or
+    re-enumerating; the pusher retries on its next cycle. Only a missing pyserial
+    install is fatal (a config error, not a transient one)."""
     global _serial_port
     try:
         import serial  # pyserial
@@ -961,20 +957,31 @@ def _open_serial():
     try:
         _serial_port = serial.Serial(ESP32_SERIAL, SERIAL_BAUD, timeout=1)
         print(f"[serial] open {ESP32_SERIAL} @ {SERIAL_BAUD}")
+        return True
     except Exception as e:
-        print(f"[serial] could not open {ESP32_SERIAL}: {e}")
-        sys.exit(1)
+        print(f"[serial] could not open {ESP32_SERIAL}: {e} (will retry)")
+        _serial_port = None
+        return False
 
 
 async def pusher(session):
+    global _serial_port
     if ESP32_SERIAL:
-        _open_serial()
+        _open_serial()                 # may fail; we retry below, never fatal
     while True:
         await asyncio.sleep(PUSH_INTERVAL)
         frame = build_frame()
         n = len(frame["ships"])
         save_mmsi_db()             # persist any new identities (no-op if unchanged)
         if ESP32_SERIAL:
+            # If the port isn't open (panel unplugged / re-enumerating), try to
+            # reopen and skip this cycle rather than crashing. The panel holds its
+            # last frame and shows WAITING after its own timeout; when the port
+            # comes back we resume automatically.
+            if _serial_port is None:
+                if not _open_serial():
+                    print(f"[push] serial not available; will retry in {PUSH_INTERVAL}s")
+                    continue
             # Newline-delimited JSON: one frame per line, '\n'-terminated.
             try:
                 line = (json.dumps(frame, separators=(",", ":")) + "\n").encode()
@@ -985,12 +992,14 @@ async def pusher(session):
                           f"({em['age_secs']}s)") if em else "emmett=None"
                 print(f"[push] {n} ships -> serial {ESP32_SERIAL}  [{emflag}]")
             except Exception as e:
-                print(f"[push] serial write failed: {e}; reopening")
+                # Transient write failure (unplug, USB reset). Close and let the
+                # next cycle reopen -- do NOT exit the process.
+                print(f"[push] serial write failed: {e}; will reopen next cycle")
                 try:
                     _serial_port.close()
                 except Exception:
                     pass
-                _open_serial()
+                _serial_port = None
         else:
             try:
                 async with session.post(ESP32_URL, json=frame, timeout=5) as resp:
@@ -1009,6 +1018,19 @@ def handle_message(msg):
         return
     observed = parse_time_utc(meta)        # AIS observation time, not receive time
     body = msg.get("Message", {})
+
+    # Emmett (USEPA Lake Guardian) rides the same connection now. Route his
+    # messages to _emmett_state and return -- he must NOT enter the register.
+    if EMMETT_MMSI and str(mmsi) == str(EMMETT_MMSI):
+        _emmett_ingest(mtype, body, meta)
+        return
+
+    # The subscription includes the wide Great Lakes box (for Emmett), so we also
+    # receive Lakes traffic that isn't ours. Keep only vessels inside the St.
+    # Lawrence register box; drop the rest so they don't pollute the register.
+    lat0 = meta.get("latitude"); lon0 = meta.get("longitude")
+    if lat0 is not None and lon0 is not None and not _in_register_box(lat0, lon0):
+        return
 
     # Class B: the subscription lets these through, but we only keep an explicit
     # allowlist of interesting small craft (tall ships, sail-training schooners).
@@ -1081,9 +1103,18 @@ def handle_message(msg):
 
 
 async def subscribe():
+    # One connection covers both regions: the St. Lawrence register box AND the
+    # Great Lakes box used to follow Emmett. AISStream's free tier effectively
+    # allows a single concurrent connection per key -- running a second socket for
+    # Emmett made both reconnect in a loop ("no close frame received"), which is
+    # why Emmett never appeared. Emmett's MMSI is routed in handle_message and
+    # does NOT enter the register; the extra Lakes traffic is filtered out there.
+    boxes = list(BOUNDING_BOX)
+    if EMMETT_MMSI:
+        boxes = boxes + list(EMMETT_GLOBAL_BOX)
     sub = {
         "APIKey": API_KEY,
-        "BoundingBoxes": BOUNDING_BOX,
+        "BoundingBoxes": boxes,
         "FilterMessageTypes": [
             "PositionReport", "ShipStaticData",
             "StandardClassBPositionReport", "ExtendedClassBPositionReport",
@@ -1092,7 +1123,8 @@ async def subscribe():
     }
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(pusher(session))
-        asyncio.create_task(emmett_task())     # separate MMSI websocket for Emmett
+        if EMMETT_MMSI:
+            print(f"[emmett] following MMSI {EMMETT_MMSI} (via main feed)")
         while True:
             try:
                 async with websockets.connect(WS_URL, ping_interval=20) as ws:
