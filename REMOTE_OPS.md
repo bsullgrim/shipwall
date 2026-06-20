@@ -176,6 +176,39 @@ Notes:
   this is exactly why Tailscale/Pi Connect matter -- they give a stable address
   regardless of which network it's on.
 
+### WiFi power saving drops Tailscale (must disable)
+
+The Pi 3's WiFi has an aggressive idle power-save mode that drops the connection
+after a few minutes idle -- which takes Tailscale down with it, locking you out.
+Symptom: SSH/Tailscale works for ~10 min then dies. Disable it:
+
+```bash
+iw dev wlan0 get power_save                  # "on" = the problem
+sudo iw dev wlan0 set power_save off          # now
+sudo nmcli connection modify "<wifi-name>" 802-11-wireless.powersave 2   # persist
+```
+
+`powersave 2` = disabled in NetworkManager's encoding. Apply it to every saved
+WiFi (home AND dads-wifi). Verify it survives a reboot: `iw dev wlan0 get
+power_save` should still say "off". If it reverts (netplan overriding NM), add a
+boot service that forces it:
+
+```bash
+sudo tee /etc/systemd/system/wifi-powersave-off.service > /dev/null <<'EOF'
+[Unit]
+Description=Disable WiFi power saving
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/iw dev wlan0 set power_save off
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl enable wifi-powersave-off.service
+```
+
+Ethernet sidesteps this entirely -- no WiFi means no WiFi power-save.
+
 ## 5. Reflash the panel remotely -- arduino-cli on the Pi
 
 Changing a sprite (`ship_sprites.h`) or the firmware (`register_esp32.ino`) means
@@ -224,13 +257,87 @@ device for `arduino-cli monitor`.
 
 Confirm the board ID with `arduino-cli board listall | grep -i matrixportal`.
 
-## 6. Maintenance reference -- the things that actually come up
+## 6. The panel USB link -- drops, and how the system survives them
+
+**The problem:** the MatrixPortal periodically drops off the Pi's USB bus
+(`dmesg` shows `USB disconnect` + `device descriptor read ... error -32`, every
+~45-80 min). The Pi's own power is fine (`vcgencmd get_throttled` = `0x0`); it's
+the per-port power/signal through the Pi 3's onboard USB hub. The real fix is a
+**powered (wall-supplied) USB hub** between Pi and panel -- but that's a third
+wall plug. Instead, three layers make the drops harmless without new hardware:
+
+**1. Stable device name (udev rule)** -- a drop re-enumerates the panel, often
+to a DIFFERENT port number (ttyACM0 -> ttyACM1), which would break the link
+since the service targets a fixed port. A udev rule keyed on the panel's stable
+VID:PID gives it a permanent name that follows it across re-enumeration:
+
+```bash
+echo 'SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="239a", ATTRS{idProduct}=="8125", SYMLINK+="shipwall-panel"' \
+  | sudo tee /etc/udev/rules.d/99-shipwall-panel.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+# point the service at the stable name:
+sudo sed -i 's#ESP32_SERIAL=/dev/ttyACM0#ESP32_SERIAL=/dev/shipwall-panel#' /etc/systemd/system/shipwall.service
+sudo systemctl daemon-reload && sudo systemctl restart shipwall.service
+ls -l /dev/shipwall-panel        # -> ttyACMx, follows the device
+```
+
+(`239a:8125` is this MatrixPortal S3; confirm yours with `lsusb | grep -i adafruit`.)
+
+**2. Serial resilience (in register_service.py)** -- the service no longer
+exits when the port vanishes (it used to `sys.exit(1)`, which then tripped
+systemd's start limit and stayed dead). It now retries every cycle: you'll see
+`[serial] could not open ... (will retry)` / `[push] serial not available` until
+the port returns, then it resumes. A transient drop is just a brief WAITING blip.
+
+**3. Auto-recovery watchdog** -- if a drop WEDGES (doesn't cleanly reconnect),
+the manual fix is `sudo usbreset 239a:8125`. The watchdog automates it: every
+minute it checks whether `[push]` lines are still appearing in the journal; if
+none for 150s while the service is active, it runs usbreset (panel re-enumerates,
+udev symlink follows, service reopens). Setup:
+
+```bash
+# the script is panel-watchdog.sh in the repo; it greps the journal for [push]
+# and runs `usbreset 239a:8125` if pushes have stalled. Then:
+sudo tee /etc/systemd/system/panel-watchdog.service > /dev/null <<'EOF'
+[Unit]
+Description=Ship Wall panel USB watchdog
+After=shipwall.service
+[Service]
+Type=oneshot
+ExecStart=/home/grims/shipwall/panel-watchdog.sh
+EOF
+sudo tee /etc/systemd/system/panel-watchdog.timer > /dev/null <<'EOF'
+[Unit]
+Description=Run the panel USB watchdog every minute
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now panel-watchdog.timer
+journalctl -u panel-watchdog -n 3 --no-pager   # expect "... healthy"
+```
+
+The watchdog depends on `PYTHONUNBUFFERED=1` in shipwall.service (so `[push]`
+reaches the journal promptly) and on usbreset needing root (the unit runs as
+root by default -- no User= line).
+
+**Net effect:** the drops still happen, but the link survives re-enumeration, the
+service survives the port vanishing, and a true wedge self-heals within ~3 min.
+No third plug, no drive to the river. If you ever want to eliminate the drops at
+the source rather than tolerate them, add the powered USB hub.
+
+## 7. Maintenance reference -- the things that actually come up
 
 ### Quick remote-health checklist
 
 ```bash
 systemctl is-active shipwall shipwall-stats   # both 'active'?
+systemctl list-timers panel-watchdog          # watchdog scheduled?
 journalctl -u shipwall -n 30 --no-pager       # recent [push] frames?
+journalctl -u panel-watchdog -n 5 --no-pager  # "healthy", or recent usbreset?
+dmesg | grep -i 'disconnect\|error -32' | tail # how often is the panel dropping?
 systemctl list-timers shipwall-clean          # compaction scheduled?
 ls -lh /home/grims/shipwall/*.csv             # file sizes sane?
 tail -5 /home/grims/shipwall/passages.csv     # crossings still logging?
@@ -243,9 +350,11 @@ df -h /                                        # SD card not full?
   after a shared-power reboot (the Pi 3 is slow to boot + connect). If it sticks:
   `systemctl is-active shipwall` (is the service even running?), then
   `journalctl -u shipwall -n 30` for `[serial] open` and `[push]` lines.
-- **WAITING for data** = the panel HAD frames and then lost them for 60s. The
-  service died or the USB link dropped. `systemctl status shipwall`; check
-  `dmesg | tail` for USB disconnect/re-enumeration.
+- **WAITING for data** = the panel HAD frames and then lost them for 60s. Most
+  often the USB link dropped/wedged (see section 6) -- the watchdog should
+  usbreset it within ~3 min; if it's stuck, `sudo usbreset 239a:8125` by hand.
+  Otherwise the service died: `systemctl status shipwall`; check `dmesg | tail`
+  for USB disconnect/re-enumeration.
 - **Blank/dark panel** = almost always hardware: confirm the panel's own 5V
   supply, the ribbon on J-IN, and (the big one for this panel) that the firmware
   uses 5 address pins. See HARDWARE_BRINGUP.md.
