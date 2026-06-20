@@ -113,6 +113,13 @@ Either way you want `register_service.py`, `operators.py`, `schedule.py`, the
 JSON data files (`mmsi_db.json`, `ship_to_operator.json`, etc.), and the CSVs
 (or let the service create fresh ones) sitting in `/home/grims/shipwall`.
 
+> **Don't commit the runtime data files.** `register.csv`, `passages.csv`,
+> `mmsi_database.json`, and `unknown_vessels.json` are gitignored on purpose —
+> the service rewrites them live. If a clone or scp leaves them tracked, a later
+> `git pull` can write merge-conflict markers into a file the service reads and
+> break it silently. Confirm `git status` doesn't list them as tracked; if it
+> does, `git rm --cached <file>`.
+
 ---
 
 ## 5. Python dependencies
@@ -127,6 +134,8 @@ python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install aiohttp websockets pyserial
 ```
+(Add `pillow` to that install line only if you'll build sprites on the Pi;
+the service itself doesn't need it.)
 
 This puts a Python with the deps at `~/shipwall/.venv/bin/python3`. Note that
 path — the service unit's `ExecStart` must point at it (see §7).
@@ -166,6 +175,30 @@ Reconnect with `ssh grims@shipwall.local`.
 
 ---
 
+# 6.5 Clock and logs (do this before you leave it unattended)
+
+The Pi 3 has no real-time clock. Without help it boots with a wrong clock until
+NTP syncs, which blocks Tailscale for a few minutes after every reboot. Install
+`fake-hwclock` so it restores the last-known time instantly:
+
+```bash
+sudo apt install -y fake-hwclock
+sudo fake-hwclock save
+systemctl is-enabled fake-hwclock-load.service   # expect: enabled
+```
+
+(On Trixie the bare `fake-hwclock.service` is masked — expected. The active
+units are `fake-hwclock-load/-save/-save.timer`, auto-enabled by the install.)
+
+Enable persistent journald so the *previous* boot's logs survive a reboot —
+essential for diagnosing why an unattended Pi rebooted:
+
+```bash
+sudo mkdir -p /var/log/journal
+sudo systemd-tmpfiles --create --prefix /var/log/journal
+sudo systemctl restart systemd-journald
+```
+---
 ## 7. Configure and smoke-test by hand
 
 Before handing it to systemd, run it once in the foreground so you can see it

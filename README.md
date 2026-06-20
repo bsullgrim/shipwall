@@ -282,7 +282,9 @@ also empty).
 everything. Pull power and restore it and the wall repopulates within seconds.
 On a shared-power reboot the panel boots in ~1 s and shows STARTING UP; the Pi
 takes 30–90 s (on a Pi 3) to boot, start the service, connect, and warm-start,
-then the panel goes live on its own.
+then the panel goes live on its own. (Remote SSH/Tailscale access can lag the panel by a few minutes on the first
+boot after a power loss, until the Pi's clock syncs — see REMOTE_OPS.md's
+fake-hwclock note. The panel itself doesn't wait on this.)
 
 ---
 
@@ -422,6 +424,15 @@ cp .env.example .env     # add your real key here
 `captures/`, and source funnel photos. A real environment variable overrides the
 file, so a systemd unit works without a `.env`. If a key lands in a commit,
 **rotate it** at aisstream.io — that's faster and safer than scrubbing history.
+
+**Never re-track the runtime data files.** `register.csv`, `passages.csv`,
+`mmsi_database.json`, and `unknown_vessels.json` are gitignored because the
+service rewrites them constantly. If they're committed on either the Pi or a dev
+machine, a later `git pull`/`stash` can leave conflict markers inside a file the
+service reads — this happened to `ship_to_operator.json` and broke its JSON
+parsing silently (the operator map fell back to empty, ships ghosted). If
+`git status` ever shows these as tracked, `git rm --cached <file>` — don't
+commit them.
 
 The repo's `shipwall.service` ships with a placeholder
 (`AISSTREAM_KEY=PUT_YOUR_KEY_HERE`); the real key lives only in the deployed copy

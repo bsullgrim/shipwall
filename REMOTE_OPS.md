@@ -153,6 +153,29 @@ rpi-connect signin               # opens a link to authorize against your accoun
 Reach it from connect.raspberrypi.com. On Trixie it also supports remote
 updates that queue even while the Pi is offline.
 
+### Unreachable for ~3 min after every reboot (clock skew → Tailscale)
+
+The Pi 3 has no RTC, so on boot its clock is wrong until NTP corrects it. Until
+then, Tailscale's TLS to the DERP relays fails — symptom: after a reboot you
+can't SSH/Tailscale in for several minutes, and the panel shows WAITING (the AIS
+websocket can't connect either). The journal shows `network is unreachable` /
+`no-derp-connection`, then a `time-jumped(Xm)` line once NTP syncs. This is NOT
+a hang and NOT a crash — it self-resolves in a few minutes.
+
+Fix: `fake-hwclock` restores the last-saved time at boot so the clock starts
+close and TLS succeeds immediately. On Trixie the monolithic
+`fake-hwclock.service` is **masked** — that's expected; the active units are
+`fake-hwclock-load.service` (restores at boot), `-save.service`, and
+`-save.timer` (re-saves hourly). Install:
+
+    sudo apt install -y fake-hwclock
+    sudo fake-hwclock save                            # seed with current time
+    systemctl is-enabled fake-hwclock-load.service    # expect: enabled
+    cat /etc/fake-hwclock.data                         # should show current UTC
+
+Do NOT run `systemctl enable fake-hwclock` — it's masked and errors. The split
+units auto-enable on install.
+
 ## 4. Adding a Wi-Fi network (e.g. Dad's, for the river)
 
 Add the river network BEFORE you travel, while the Pi is still reachable at home.
@@ -337,12 +360,26 @@ systemctl is-active shipwall shipwall-stats   # both 'active'?
 systemctl list-timers panel-watchdog          # watchdog scheduled?
 journalctl -u shipwall -n 30 --no-pager       # recent [push] frames?
 journalctl -u panel-watchdog -n 5 --no-pager  # "healthy", or recent usbreset?
-dmesg | grep -i 'disconnect\|error -32' | tail # how often is the panel dropping?
+dmesg | grep -iE 'disconnect|error -32|dwc_otg|FSM NP' | tail # how often is the panel dropping?
 systemctl list-timers shipwall-clean          # compaction scheduled?
 ls -lh /home/grims/shipwall/*.csv             # file sizes sane?
 tail -5 /home/grims/shipwall/passages.csv     # crossings still logging?
 df -h /                                        # SD card not full?
 ```
+### Persistent logs (so you can diagnose the PREVIOUS boot)
+
+By default the journal is volatile — wiped each reboot — so you can't see how the
+last boot ended. Enable persistence once:
+
+    sudo mkdir -p /var/log/journal
+    sudo systemd-tmpfiles --create --prefix /var/log/journal
+    sudo systemctl restart systemd-journald
+
+After the next reboot, `journalctl --list-boots` shows history and
+`journalctl -b -1 -n 40` reveals how the prior boot ended: orderly "Stopped
+target" lines = clean reboot (software/scheduled/manual); a log that cuts off
+mid-line = hard power loss (suspect the Pi's 5V supply or cable — not the panel's
+own supply). This is the missing piece for answering *why did it reboot*.
 
 ### "The panel says STARTING UP / WAITING / nothing"
 
@@ -354,7 +391,10 @@ df -h /                                        # SD card not full?
   often the USB link dropped/wedged (see section 6) -- the watchdog should
   usbreset it within ~3 min; if it's stuck, `sudo usbreset 239a:8125` by hand.
   Otherwise the service died: `systemctl status shipwall`; check `dmesg | tail`
-  for USB disconnect/re-enumeration.
+  for USB disconnect/re-enumeration. Third possibility: the Pi recently rebooted and is in the ~3-min clock-skew
+  window (see §3) — wait a couple minutes; it self-recovers, and fake-hwclock
+  shrinks this to seconds. `journalctl --list-boots` confirms a reboot just
+  happened.
 - **Blank/dark panel** = almost always hardware: confirm the panel's own 5V
   supply, the ribbon on J-IN, and (the big one for this panel) that the firmware
   uses 5 address pins. See HARDWARE_BRINGUP.md.
