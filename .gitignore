@@ -44,4 +44,9 @@ venv/
 .vscode/
 .idea/
 .DS_Store
-*.swp
+*.swpregister.csv
+passages.csv
+mmsi_database.json
+mmsi_db.json
+unknown_vessels.json
+register.bak.*.csv
