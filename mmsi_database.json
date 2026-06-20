@@ -551,11 +551,11 @@
   },
   "316031354": {
     "beam": 24,
-    "code": "ALG",
+    "code": "???",
     "flag": "CA",
     "length": 226,
     "name": "CAPT. HENRY JACKMAN",
-    "operator": "ALGOMA",
+    "operator": "UNKNOWN",
     "type": "CARGO",
     "type_code": 70,
     "updated": "2026-06-09T08:52:49"
