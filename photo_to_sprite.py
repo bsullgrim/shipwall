@@ -51,7 +51,7 @@ CANON_LIGHT = (235, 235, 235)
 GREY_SAT = 28          # max (maxchannel - minchannel) to count a color as grey
 HERE = os.path.dirname(os.path.abspath(__file__))
 MASK_PATH = os.path.join(HERE, "CANON_MASK_SPANS.json")
-HEADER = os.path.join(HERE, "ship_sprites.h")
+HEADER = os.path.join(HERE, "register_esp32", "ship_sprites.h")
 PALETTES_PATH = os.path.join(HERE, "LIVERY_PALETTES.json")
 
 
