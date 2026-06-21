@@ -111,6 +111,7 @@ float    gHours    = 18.0f;
 float    gHome     = 0.5f;
 uint32_t lastFrameMs = 0;
 bool     gotFirstFrame = false;     // false until the first complete frame parses
+uint32_t lastHeartbeatMs = 0;       // last time we emitted a liveness heartbeat
 
 // ---- Colors -----------------------------------------------------------------
 uint16_t C_NAME, C_LABEL, C_VALUE, C_DIM, C_UP, C_DOWN, C_ACCENT, C_CODE;
@@ -514,6 +515,22 @@ void loop() {
   }
 
   matrix.show();          // REQUIRED: copies the back buffer to the panel.
+
+  // Liveness heartbeat: once per second, emit a line the Pi can read to confirm
+  // the render loop is actually running. This is the ONLY signal that catches a
+  // wedged firmware -- if loop() hangs, the panel keeps its last image and the
+  // USB peripheral stays enumerated, so the Pi's [push] writes still "succeed"
+  // and the push-side watchdog sees nothing wrong. A stalled heartbeat is the
+  // tell. free_heap rides along so a slow heap leak (String churn over hours)
+  // shows up as a falling number before it ever causes a hang. Starts with '#'
+  // so it can never be mistaken for a frame (frames start with '{').
+  if (nowMs - lastHeartbeatMs >= 1000) {
+    lastHeartbeatMs = nowMs;
+    Serial.print("#hb free_heap=");
+    Serial.print((unsigned long)ESP.getFreeHeap());
+    Serial.print(" uptime=");
+    Serial.println((unsigned long)(nowMs / 1000));
+  }
 
   // Keep draining the serial RX buffer during the inter-frame wait instead of
   // a blocking delay(33). The S3's USB CDC receive buffer is small (~256 B);

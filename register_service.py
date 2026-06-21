@@ -941,6 +941,77 @@ def build_frame():
 
 # --- Transport: serial (hardware) or HTTP (mock) -----------------------------
 _serial_port = None
+_last_heartbeat = None     # epoch secs of the last "#hb" line read from the board
+_last_hb_log = 0.0         # rate-limit the [heartbeat] log line
+
+# How long the board can go without emitting a heartbeat (while we ARE pushing)
+# before we treat the firmware as wedged and reopen the port to reboot it. The
+# firmware emits ~1 hb/sec; 90s is ~90 missed beats -- unambiguous. This catches
+# the one failure the push-side watchdog can't see: a hung render loop, where
+# the USB peripheral stays enumerated so [push] writes still "succeed" while the
+# board renders nothing. A stalled heartbeat is the only tell.
+HB_WEDGE_SECS = 90
+# Log a [heartbeat] line at most this often (the board sends ~1/sec; we don't
+# want to flood the journal, but the watchdog and the free_heap trend need it).
+HB_LOG_EVERY = 30
+
+
+def _read_heartbeats():
+    """Drain any bytes the board sent back and update _last_heartbeat if a '#hb'
+    line arrived. Non-blocking and cheap. Must run after each write or the bytes
+    accumulate in the OS RX buffer. Logs a [heartbeat] line at most every
+    HB_LOG_EVERY seconds, carrying the board's free_heap so a slow heap leak
+    (String churn over hours) shows up as a falling number before it can hang."""
+    global _last_heartbeat, _last_hb_log
+    if _serial_port is None:
+        return
+    try:
+        waiting = _serial_port.in_waiting
+    except Exception:
+        return
+    if not waiting:
+        return
+    try:
+        data = _serial_port.read(waiting)
+    except Exception:
+        return
+    if not data:
+        return
+    now = time.time()
+    saw_hb = False
+    free_heap = None
+    for ln in data.split(b"\n"):
+        if ln.startswith(b"#hb"):
+            saw_hb = True
+            try:
+                for tok in ln.split():
+                    if tok.startswith(b"free_heap="):
+                        free_heap = int(tok.split(b"=", 1)[1])
+            except Exception:
+                pass
+    if saw_hb:
+        _last_heartbeat = now
+        if now - _last_hb_log >= HB_LOG_EVERY:
+            _last_hb_log = now
+            fh = f" free_heap={free_heap}" if free_heap is not None else ""
+            print(f"[heartbeat] panel render loop alive{fh}", flush=True)
+
+
+def _reopen_serial(reason):
+    """Close and reopen the serial port. Opening asserts DTR/RTS, which reboots
+    the ESP32 -- this is what actually un-wedges a hung firmware. A usbreset does
+    NOT reliably reboot the CPU (the USB peripheral stays alive through a hang),
+    so reopening the port is the correct recovery. Reuses the same teardown the
+    write-failure path uses; _open_serial() runs on the next cycle."""
+    global _serial_port, _last_heartbeat
+    print(f"[serial] reopening port: {reason}", flush=True)
+    try:
+        if _serial_port is not None:
+            _serial_port.close()
+    except Exception:
+        pass
+    _serial_port = None
+    _last_heartbeat = None        # don't immediately re-trigger after reopen
 
 
 def _open_serial():
@@ -965,7 +1036,7 @@ def _open_serial():
 
 
 async def pusher(session):
-    global _serial_port
+    global _serial_port, _last_heartbeat
     if ESP32_SERIAL:
         _open_serial()                 # may fail; we retry below, never fatal
     while True:
@@ -982,6 +1053,9 @@ async def pusher(session):
                 if not _open_serial():
                     print(f"[push] serial not available; will retry in {PUSH_INTERVAL}s")
                     continue
+                # A fresh open just rebooted the board (DTR/RTS). Give the
+                # heartbeat a grace period before judging it silent.
+                _last_heartbeat = time.time()
             # Newline-delimited JSON: one frame per line, '\n'-terminated.
             try:
                 try:
@@ -998,10 +1072,25 @@ async def pusher(session):
                 line = (payload + "\n").encode()
                 _serial_port.write(line)
                 _serial_port.flush()
+
+                # Read whatever the board sent back (heartbeats + any debug) and
+                # update liveness. Must drain it or it piles up in the OS RX
+                # buffer; also feeds the free_heap trend for leak-watching.
+                _read_heartbeats()
+
                 em = frame.get("emmett")
                 emflag = (f"emmett@{em['lat']:.2f},{em['lon']:.2f} "
                           f"({em['age_secs']}s)") if em else "emmett=None"
                 print(f"[push] {n} ships -> serial {ESP32_SERIAL}  [{emflag}]")
+
+                # WEDGE CHECK: the write succeeded (so the USB link is fine) but
+                # the board's render loop has gone silent. That's a firmware hang,
+                # not an unplug -- the failure the push-side watchdog can't see.
+                # Reopen the port to reboot the chip.
+                if (_last_heartbeat is not None
+                        and (time.time() - _last_heartbeat) >= HB_WEDGE_SECS):
+                    age = int(time.time() - _last_heartbeat)
+                    _reopen_serial(f"no heartbeat for {age}s (firmware wedged)")
             except Exception as e:
                 # Transient write failure (unplug, USB reset). Close and let the
                 # next cycle reopen -- do NOT exit the process.
