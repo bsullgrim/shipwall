@@ -984,7 +984,18 @@ async def pusher(session):
                     continue
             # Newline-delimited JSON: one frame per line, '\n'-terminated.
             try:
-                line = (json.dumps(frame, separators=(",", ":")) + "\n").encode()
+                try:
+                    payload = json.dumps(frame, separators=(",", ":"), allow_nan=False)
+                except ValueError as _e:
+                    import math as _math
+                    def _clean(o):
+                        if isinstance(o, float) and not _math.isfinite(o): return None
+                        if isinstance(o, dict): return {k: _clean(v) for k, v in o.items()}
+                        if isinstance(o, list): return [_clean(v) for v in o]
+                        return o
+                    print(f"[frame] sanitized non-JSON float(s): {_e}", flush=True)
+                    payload = json.dumps(_clean(frame), separators=(",", ":"), allow_nan=False)
+                line = (payload + "\n").encode()
                 _serial_port.write(line)
                 _serial_port.flush()
                 em = frame.get("emmett")
