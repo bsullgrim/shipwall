@@ -231,12 +231,25 @@ bool applyFrame(const char* json, size_t len) {
 }
 
 // Pull bytes from Serial, assemble lines, apply on newline.
+// Self-resyncing: a frame always starts with '{'. After an ESP32 reset or a
+// mid-frame RX overflow, the byte stream can begin partway through a frame,
+// permanently offsetting every '\n' boundary by one frame -- so each line then
+// parses as "tail of N + head of N+1" and fails forever until the Pi restarts
+// (observed: a 2h "WAITING" stall after a power-on reset). To recover on our
+// own we refuse to buffer anything until we've seen a '{', and only parse a
+// line that starts with '{'. The first clean newline after a desync then
+// realigns us to a real frame boundary. (register_service.py emits
+// json.dumps(frame)+"\n", which always starts with '{', so this never drops a
+// valid frame. If the wire format ever gains a prefix/wrapper, revisit.)
 void pumpSerial() {
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n') {
-      if (lineLen > 0 && lineLen < FRAME_BUF_MAX) applyFrame(lineBuf, lineLen);
+      if (lineLen > 0 && lineLen < FRAME_BUF_MAX && lineBuf[0] == '{')
+        applyFrame(lineBuf, lineLen);
       lineLen = 0;                          // also resets after an overlong drop
+    } else if (lineLen == 0 && c != '{') {
+      continue;                             // between frames: ignore until a '{'
     } else if (lineLen < FRAME_BUF_MAX - 1) {
       lineBuf[lineLen++] = c;
     } else {
