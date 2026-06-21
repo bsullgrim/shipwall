@@ -66,6 +66,7 @@ NAME_PREFIX_RULES = [
     ("PAUL",     "INTERLAKE"), # Paul R. Tregurtha
     # --- learned from observed sightings (only where they map to a sprite) ---
     ("MCASPHALT","MCASPHALT"), # "MCASPHALT ADVANTAGE" -- name carries the operator
+    ("BBC ",     "BRIESE"),
 ]
 
 # Fleets whose ship names have NO clean prefix, so name-matching can't identify
