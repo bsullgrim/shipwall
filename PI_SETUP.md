@@ -175,7 +175,7 @@ Reconnect with `ssh grims@shipwall.local`.
 
 ---
 
-# 6.5 Clock and logs (do this before you leave it unattended)
+### 6.5 Clock and logs (do this before you leave it unattended)
 
 The Pi 3 has no real-time clock. Without help it boots with a wrong clock until
 NTP syncs, which blocks Tailscale for a few minutes after every reboot. Install
@@ -199,6 +199,59 @@ sudo systemd-tmpfiles --create --prefix /var/log/journal
 sudo systemctl restart systemd-journald
 ```
 ---
+### 6.6 Persistent journald logging (survives reboots)
+
+**Problem:** Raspberry Pi OS ships `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf`
+with `Storage=volatile` to spare the SD card. This **silently overrides** `Storage=persistent`
+set in the main `/etc/systemd/journald.conf` — drop-ins in `journald.conf.d/` always win over
+the main file. Symptom: `journalctl --list-boots` only ever shows boot 0; `journalctl --header`
+reports `/run/log/journal/...` (tmpfs) instead of `/var/log/journal/...`. Logs are lost on every
+reboot, so you can't diagnose anything that happened before the last boot.
+
+**Do NOT** edit `40-rpi-volatile-storage.conf` directly — a package update reverts it.
+
+**Fix:** add a higher-sort-order drop-in in `/etc` (wins by both sort order and /etc > /usr/lib):
+
+    sudo mkdir -p /etc/systemd/journald.conf.d
+    sudo tee /etc/systemd/journald.conf.d/99-persistent.conf >/dev/null <<'EOF'
+    [Journal]
+    Storage=persistent
+    SystemMaxUse=200M
+    SystemMaxFileSize=50M
+    EOF
+    sudo systemctl restart systemd-journald
+    sudo journalctl --flush
+
+**Verify:**
+
+    # persistent must appear LAST (last value wins):
+    sudo systemd-analyze cat-config systemd/journald.conf | grep -i Storage
+    # header must show /var/log, not /run/log:
+    journalctl --header | grep "File path" | head -1
+    # after a reboot, a boot -1 must appear:
+    journalctl --list-boots
+
+The `SystemMaxUse`/`SystemMaxFileSize` caps bound SD-card write wear — this is the tradeoff
+the volatile default was avoiding, so keep them when enabling persistence.
+
+**Note:** `getfacl`/`setfacl` aren't installed by default (`sudo apt-get install -y acl`).
+Standard Debian ACL on `/var/log/journal` (`group:adm:r-x`) is normal and does NOT block
+journald — don't chase it.
+
+### 6.7 Benign boot-time "time jump" / "slept Ns" messages (with fake-hwclock, no RTC)
+
+The Pi 3B has no RTC. On boot the clock starts at the saved fake-hwclock value, then NTP steps
+it to true time. This produces harmless log noise that is NOT a real sleep or power event:
+
+- `systemd-journald: Time jumped backwards, rotating` — journald reacting to the NTP correction.
+- `tailscaled: monitor: time jump detected (slept 36s), probably wake from sleep` — tailscaled
+  mislabels the NTP step as a "sleep." A 30–40s value = normal clock-settling window.
+
+**A real event looks different:** the 2026-06-21 outage was `slept 43m23s` — minutes, not seconds,
+and mid-run rather than at boot. Scale and timing distinguish benign settling from a genuine
+power/hang event. Cross-check with `vcgencmd get_throttled` (sticky bit 16 = under-voltage since
+boot) — `0x0` means no brownout was recorded.
+--- 
 ## 7. Configure and smoke-test by hand
 
 Before handing it to systemd, run it once in the foreground so you can see it
