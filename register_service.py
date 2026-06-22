@@ -65,7 +65,13 @@ WS_URL = "wss://stream.aisstream.io/v0/stream"
 
 # Outer box: Cape Vincent -> Eisenhower Lock (same reach as the live version).
 BOUNDING_BOX = [[[44.10, -76.40], [45.3237, -73.9132]]]
-
+# If no AIS message arrives within this many seconds, the feed is considered
+# silently dead (socket open, subscription "accepted", zero data -- the failure
+# mode that none of the heartbeat/serial/backstop watchdogs can see). Force a
+# reconnect so the drop is logged and retried instead of showing stale ships.
+# Real St. Lawrence traffic is sparse, so this must be generous -- a genuinely
+# quiet stretch is normal. 600s (10 min) is well past any normal gap here.
+FEED_STALE_SECS = float(os.environ.get("FEED_STALE_SECS", "600"))
 PUSH_INTERVAL  = 10                                   # seconds between frames
 RETAIN_HOURS   = float(os.environ.get("REGISTER_HOURS", "18"))
 RETAIN_SECS    = RETAIN_HOURS * 3600
@@ -1245,7 +1251,13 @@ async def subscribe():
                 async with websockets.connect(WS_URL, ping_interval=20) as ws:
                     await ws.send(json.dumps(sub))
                     print(f"[ais] subscribed; building {RETAIN_HOURS:.0f}h register")
-                    async for raw in ws:
+                    while True:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=FEED_STALE_SECS)
+                        except asyncio.TimeoutError:
+                            raise ConnectionError(
+                                f"no AIS data for {FEED_STALE_SECS:.0f}s "
+                                f"(silent feed); forcing reconnect")
                         handle_message(json.loads(raw))
             except Exception as e:
                 print(f"[ais] connection lost ({e}); reconnecting in 5s")
