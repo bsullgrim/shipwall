@@ -51,3 +51,5 @@ mmsi_db.json
 unknown_vessels.json
 register.bak.*.csv
 register.csv
+*.bak
+*.h.bak
