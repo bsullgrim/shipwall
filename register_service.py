@@ -229,8 +229,13 @@ _passage_header_written = False
 # Guard against logging the same crossing repeatedly when a ship lingers or
 # its AIS position jitters back and forth across HOME_PROGRESS. Keyed on
 # (mmsi, day, direction) -- the same key the startup backfill de-dupes on.
-_logged_passages = set()
-
+_logged_passages = set()# (mmsi, direction) -> sorted list of crossing epochs already logged.
+# A new crossing is a duplicate of an existing one when its interpolated
+# crossing time falls within DEDUP_WINDOW_SECS of one already recorded --
+# tolerant of the interpolated time landing on a different calendar day when
+# one detection bridged a long feed gap and another saw the real adjacent fixes.
+_logged_passages = {}
+DEDUP_WINDOW_SECS = 6 * 3600   # one transit per ship/direction per ~6h
 
 def _passage_pass_time(t_before, p_before, t_after, p_after):
     """Epoch of the interpolated HOME_PROGRESS crossing between two sightings.
@@ -250,6 +255,17 @@ def _passage_key(mmsi, t_pass, direction):
     day = _dt.datetime.fromtimestamp(t_pass).date().isoformat()
     return (str(mmsi), day, direction)
 
+def _passage_is_dup(mmsi, t_pass, direction):
+    """True if a crossing for this ship+direction is already logged within
+    DEDUP_WINDOW_SECS of t_pass."""
+    times = _logged_passages.get((str(mmsi), direction))
+    if not times:
+        return False
+    return any(abs(t_pass - t) <= DEDUP_WINDOW_SECS for t in times)
+
+
+def _passage_remember(mmsi, t_pass, direction):
+    _logged_passages.setdefault((str(mmsi), direction), []).append(t_pass)
 
 def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after):
     global _passage_header_written
@@ -310,10 +326,9 @@ def check_passage(mmsi, lat, lon, observed, name, op):
     # which can roll past midnight and disagree with the day the backfill keys
     # on, letting a restart re-log the same crossing.
     t_pass = _passage_pass_time(t_prev, p_prev, observed, p)
-    key = _passage_key(mmsi, t_pass, direction)
-    if key in _logged_passages:
+    if _passage_is_dup(mmsi, t_pass, direction):
         return
-    _logged_passages.add(key)
+    _passage_remember(mmsi, t_pass, direction)
     _log_passage(mmsi, name, op, direction, t_prev, p_prev, observed, p)
 
 
@@ -1247,9 +1262,10 @@ def _seed_logged_passages_from_disk():
     try:
         with open(PASSAGE_LOG, newline="") as f:
             for row in _csv.DictReader(f):
-                _logged_passages.add((row.get("mmsi", ""),
-                                      row.get("pass_time", "")[:10],
-                                      row.get("direction", "")))
+                t = _parse_iso(row.get("pass_time", ""))
+                if t is None:
+                    continue
+                _passage_remember(row.get("mmsi", ""), t, row.get("direction", ""))
     except Exception:
         pass
 
@@ -1266,8 +1282,6 @@ def _backfill_passages_from_register():
     if not os.path.exists(VESSEL_LOG):
         return
 
-    # already-logged crossings, to avoid double-logging
-    have = set(_logged_passages)
 
     # gather each vessel's time-sorted (epoch, progress, name, op) sightings
     tracks = {}
@@ -1312,12 +1326,10 @@ def _backfill_passages_from_register():
             if not direction:
                 continue
             t_pass = _passage_pass_time(t0, p0, t1, p1)
-            key = _passage_key(mmsi, t_pass, direction)
-            if key in have:
+            if _passage_is_dup(mmsi, t_pass, direction):
                 continue
+            _passage_remember(mmsi, t_pass, direction)
             _log_passage(mmsi, name, op or "UNKNOWN", direction, t0, p0, t1, p1)
-            have.add(key)
-            _logged_passages.add(key)
             added += 1
     if added:
         print(f"[backfill] recovered {added} passage(s) from the register "
