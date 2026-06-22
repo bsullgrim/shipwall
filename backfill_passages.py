@@ -34,7 +34,7 @@ import register_service as rs   # reuse the EXACT geometry the live detector use
 PASS_COLS = ["pass_time", "mmsi", "name", "operator", "direction",
              "seen_before", "seen_after", "gap_min"]
 
-
+DEDUP_WINDOW_SECS = 6 * 3600   # one transit per ship/direction per ~6h
 def _epoch(iso):
     try:
         return dt.datetime.fromisoformat(iso).timestamp()
@@ -108,19 +108,24 @@ def find_crossings(by_mmsi):
     return out
 
 
-def existing_keys(path):
-    """Set of (mmsi, day, direction) already present, so we don't double-log."""
-    keys = set()
+def existing_times(path):
+    """(mmsi, direction) -> list of crossing epochs already present, so a new
+    crossing within DEDUP_WINDOW_SECS of a logged one isn't double-logged."""
+    times = {}
     if not os.path.exists(path):
-        return keys
+        return times
     try:
         with open(path, newline="") as f:
             for row in csv.DictReader(f):
-                keys.add((row.get("mmsi", ""), row.get("pass_time", "")[:10],
-                          row.get("direction", "")))
+                t = _epoch(row.get("pass_time", ""))
+                if t is None:
+                    continue
+                times.setdefault(
+                    (row.get("mmsi", ""), row.get("direction", "")), []
+                ).append(t)
     except Exception:
         pass
-    return keys
+    return times
 
 
 def main(register, out, since):
@@ -129,9 +134,24 @@ def main(register, out, since):
         sys.exit(1)
     by_mmsi = load_sightings(register, since)
     crossings = find_crossings(by_mmsi)
-    have = existing_keys(out)
-    new = [c for c in crossings
-           if (str(c["mmsi"]), c["pass_time"][:10], c["direction"]) not in have]
+    have = existing_times(out)
+
+    def _is_dup(c):
+        ts = have.get((str(c["mmsi"]), c["direction"]))
+        if not ts:
+            return False
+        ct = _epoch(c["pass_time"])
+        return ct is not None and any(abs(ct - t) <= DEDUP_WINDOW_SECS for t in ts)
+
+    new = []
+    for c in crossings:
+        if _is_dup(c):
+            continue
+        new.append(c)
+        # remember within this run too, so two interpolations of the same
+        # crossing in one scan don't both pass (e.g. a fat gap + tight pair)
+        have.setdefault((str(c["mmsi"]), c["direction"]), []).append(
+            _epoch(c["pass_time"]))
 
     write_header = not os.path.exists(out)
     with open(out, "a", newline="", encoding="utf-8") as f:
