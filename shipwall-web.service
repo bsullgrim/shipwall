@@ -15,6 +15,7 @@ WorkingDirectory=/home/grims/shipwall
 Environment=WEBAPP_PORT=8080
 Environment=PASSAGE_LOG=/home/grims/shipwall/passages.csv
 Environment=FUN_STATS=/home/grims/shipwall/fun_stats.json
+Environment=MMSI_DB=/home/grims/shipwall/mmsi_database.json
 # Align this with whatever shipwall.service uses (mmsi_db.json vs mmsi_database.json).
 # Read-time name healing in passage_stats.py uses it; a wrong path just leaves
 # "MMSI <n>" placeholders, it won't crash.

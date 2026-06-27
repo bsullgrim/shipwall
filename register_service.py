@@ -27,7 +27,7 @@ import json
 import os
 import sys
 import time
-
+from mirror import mirror_push
 import aiohttp
 import websockets
 
@@ -1063,6 +1063,7 @@ async def pusher(session):
     while True:
         await asyncio.sleep(PUSH_INTERVAL)
         frame = build_frame()
+        mirror_push(frame)  
         n = len(frame["ships"])
         save_mmsi_db()             # persist any new identities (no-op if unchanged)
         if ESP32_SERIAL:
