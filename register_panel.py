@@ -61,12 +61,21 @@ def save_capture(payload):
             f.write(raw)
     print(f"[capture] saved {path}")
 
+def _find_asset(name, subdirs=("", "register_esp32")):
+    """Locate a data asset relative to THIS file, not the process CWD. Searches
+    the repo root first, then the Arduino sketch dir (where ship_sprites.h lives
+    for compile/flash). Raises with a useful message if it's genuinely absent --
+    a missing asset must fail loudly, not degrade to a confusing unpack error."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in subdirs:
+        p = os.path.join(here, d, name)
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(
+        f"{name} not found under {here} (looked in: {', '.join(repr(s or '.') for s in subdirs)})")
 
-def load_sprites(path="ship_sprites.h"):
-    try:
-        text = open(path).read()
-    except FileNotFoundError:
-        return {}, 16
+def load_sprites(path=None):
+    text = open(path or _find_asset("ship_sprites.h")).read()
     size_m = re.search(r"#define SPRITE_SIZE (\d+)", text)
     size = int(size_m.group(1)) if size_m else 16
     sprites = {}
@@ -75,7 +84,7 @@ def load_sprites(path="ship_sprites.h"):
         key = m.group(1)
         vals = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", m.group(2))]
         if key.endswith("_MINI"):
-            minis[key[:-5]] = vals          # strip suffix -> operator key
+            minis[key[:-5]] = vals
         else:
             sprites[key] = vals
     return sprites, size, minis
