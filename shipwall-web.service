@@ -1,0 +1,34 @@
+[Unit]
+Description=St. Lawrence Ship Wall -- unified web app (live panel mirror + passage stats)
+Documentation=https://github.com/bsullgrim/shipwall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grims
+
+# MUST be the repo root: register_panel.py loads ship_sprites.h, font5x7.js and
+# emmett_panel_data.json by RELATIVE path on import. A wrong CWD = blank panel.
+WorkingDirectory=/home/grims/shipwall
+
+Environment=WEBAPP_PORT=8080
+Environment=PASSAGE_LOG=/home/grims/shipwall/passages.csv
+Environment=FUN_STATS=/home/grims/shipwall/fun_stats.json
+# Align this with whatever shipwall.service uses (mmsi_db.json vs mmsi_database.json).
+# Read-time name healing in passage_stats.py uses it; a wrong path just leaves
+# "MMSI <n>" placeholders, it won't crash.
+Environment=MMSI_DB=/home/grims/shipwall/mmsi_db.json
+
+ExecStart=/home/grims/shipwall/.venv/bin/python3 /home/grims/shipwall/webapp.py
+
+Restart=on-failure
+RestartSec=3
+
+# Cheap, safe hardening for a publicly-funneled service. Both are compatible
+# with reading files under /home; remove if they ever get in the way.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
