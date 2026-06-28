@@ -199,6 +199,7 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
 <style>
   :root{color-scheme:dark}
+  *{box-sizing:border-box}
   body{margin:0;background:#0e1116;color:#d8dee9;font-family:system-ui,-apple-system,sans-serif;padding:16px}
   h1{font-size:20px;margin:0 0 2px} h2{font-size:15px;color:#8b98a9;margin:24px 0 8px;font-weight:600}
   .sub{color:#6e7b8c;font-size:13px;margin-bottom:12px}
@@ -221,6 +222,57 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
   .tabs button.on{background:#1d3550;color:#cfe6ff;border-color:#2a4a6e}
   select{background:#141a22;color:#d8dee9;border:1px solid #1d2530;border-radius:7px;padding:6px 10px;font-size:14px}
   a{color:#9ad0ff}
+
+  /* ---------- Mobile (phones, portrait) ---------- */
+  @media (max-width:560px){
+    body{padding:12px}
+    h1{font-size:18px}
+    h2{font-size:14px;margin:18px 0 6px}
+    .sub{font-size:12px}
+    table{font-size:13px}
+    th,td{padding:6px 6px}
+    td{overflow-wrap:break-word}            /* break long words only as a last resort */
+    .num,.rank{white-space:nowrap}
+    .dword{display:none}                    /* recent log: show the direction arrow only */
+    select{width:100%;max-width:240px}
+    .tabs button{padding:8px 12px;font-size:13px}
+    .tot{gap:8px}
+    .tot div{padding:8px 12px;flex:1 1 40%}
+    .tot b{font-size:20px}
+
+    /* Leaderboard table -> stacked cards. Each row becomes a card laid out as a
+       CSS grid: ship name + operator span the full width as a header, then
+       Passes / Down / Up / Last sit below as four labelled chips. The table
+       above 560px is unchanged. */
+    table.lb thead{display:none}
+    table.lb, table.lb tbody{display:block}
+    table.lb tr{
+      display:grid;grid-template-columns:repeat(4,1fr);gap:7px 6px;
+      background:#141a22;border:1px solid #1d2530;border-radius:10px;
+      padding:12px 12px 11px;margin:0 0 8px;position:relative;
+    }
+    table.lb tr:hover td{background:none}   /* no per-row hover inside a card */
+    table.lb td{border:none;padding:0;font-size:13px}
+    table.lb td::before{                    /* small label above each chip value */
+      content:attr(data-label);display:block;
+      color:#6e7b8c;font-size:10px;font-weight:600;text-transform:uppercase;
+      letter-spacing:.03em;margin-bottom:1px;
+    }
+    table.lb td.big{                        /* ship name = card title, full width */
+      grid-column:1 / -1;font-size:16px;font-weight:600;color:#fff;
+      padding-right:2.4em;white-space:normal;word-break:normal;overflow-wrap:break-word;
+    }
+    table.lb td.big::before{display:none}
+    table.lb td.code{grid-column:1 / -1;margin-bottom:5px}   /* operator = subtitle */
+    table.lb td.code::before{display:none}
+    table.lb td.rank{                       /* rank = corner badge, no label */
+      position:absolute;top:11px;right:12px;color:#6e7b8c;font-size:12px;
+    }
+    table.lb td.rank::before{content:'#';display:inline;margin:0;
+      color:#6e7b8c;font-size:12px;font-weight:600;text-transform:none;letter-spacing:0}
+    table.lb td.num{text-align:left}        /* chips read left-aligned under labels */
+    table.lb td.num:empty::after{content:'0';color:#3a4350}  /* show 0, not a blank chip */
+  }
 </style></head><body>
 <h1>St. Lawrence Ship Wall</h1>
 <div class=sub>Vessels passing Danger Island &mdash; live detections plus the historical spotting log</div>
@@ -255,17 +307,22 @@ function totsBlock(t){
 }
 function leaderboardTable(lb, limit){
   if(!lb.length) return '<div class=empty>No passages recorded.</div>';
-  let h='<table><tr><th class=rank>#</th><th>Ship</th><th>Op</th>'+
-     '<th class=num>Passes</th><th class=num>Down</th><th class=num>Up</th><th>Last</th></tr>';
+  let h='<table class=lb><thead><tr>'+
+     '<th class=rank>#</th><th>Ship</th><th>Op</th>'+
+     '<th class=num>Passes</th><th class=num>Down</th><th class=num>Up</th><th>Last</th>'+
+     '</tr></thead><tbody>';
   lb.slice(0,limit||lb.length).forEach((s,i)=>{
-    h+='<tr><td class=rank>'+(i+1)+'</td>'+
-       '<td class=big>'+esc(s.name)+'</td><td class=code>'+esc(s.operator)+'</td>'+
-       '<td class="num big">'+s.count+'</td>'+
-       '<td class="num down">'+(s.down||'')+'</td>'+
-       '<td class="num up">'+(s.up||'')+'</td>'+
-       '<td>'+fmtDay(s.last)+'</td></tr>';
+    h+='<tr>'+
+       '<td class=rank data-label="#">'+(i+1)+'</td>'+
+       '<td class=big data-label="Ship">'+esc(s.name)+'</td>'+
+       '<td class=code data-label="Operator">'+esc(s.operator)+'</td>'+
+       '<td class="num" data-label="Passes">'+s.count+'</td>'+
+       '<td class="num down" data-label="Down">'+(s.down||'')+'</td>'+
+       '<td class="num up" data-label="Up">'+(s.up||'')+'</td>'+
+       '<td data-label="Last">'+fmtDay(s.last)+'</td>'+
+       '</tr>';
   });
-  return h+'</table>';
+  return h+'</tbody></table>';
 }
 function recentTable(recent){
   if(!recent||!recent.length) return '';
@@ -276,8 +333,8 @@ function recentTable(recent){
   return h+'</table>';
 }
 function dirLabel(d){
-  if(d==='downbound') return '<span class=down>&#9660; downbound</span>';
-  if(d==='upbound') return '<span class=up>&#9650; upbound</span>';
+  if(d==='downbound') return '<span class=down>&#9660;<span class=dword> downbound</span></span>';
+  if(d==='upbound') return '<span class=up>&#9650;<span class=dword> upbound</span></span>';
   return '<span style="color:#6e7b8c">&mdash;</span>';
 }
 function busiestBlock(b, year){

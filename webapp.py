@@ -155,14 +155,7 @@ PANEL_MOBILE_CSS = """
 # than blowing out the whole page.
 STATS_MOBILE_CSS = """
   *{box-sizing:border-box}
-  html,body{max-width:100%;overflow-x:hidden;margin:0}
-  body{padding-left:10px;padding-right:10px}
-  table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse}
-  td,th{word-break:break-word;overflow-wrap:anywhere}
-  img,canvas,svg{max-width:100%;height:auto}
-  pre,code{white-space:pre-wrap;word-break:break-word}
-  /* containers commonly used for layout -- keep them within the viewport */
-  div,section,header,main{max-width:100%}
+  html,body{max-width:100%;overflow-x:hidden}
 """
 
 
