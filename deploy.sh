@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/grims/shipwall}"
-SERVICE="${SERVICE:-shipwall}"
+SERVICE="${SERVICE:-shipwall shipwall-web}"
 BRANCH="${BRANCH:-main}"
 PYTHON="${PYTHON:-$REPO_DIR/.venv/bin/python3}"
 
@@ -55,16 +55,28 @@ if ! git ls-files '*.py' -z | xargs -0 "$PYTHON" -m py_compile; then
 fi
 echo "==> compile OK"
 
-# 5. Restart the service and confirm it actually came up.
-echo "==> restarting $SERVICE"
-sudo systemctl restart "$SERVICE"
+# 5. Restart the services and confirm each actually came up. SERVICE may name
+#    more than one unit (e.g. the AIS service + the web app) -- restart them
+#    together, then verify each independently so a dead web app can't hide
+#    behind a healthy ingest service (the failure that kept serving stale code).
+echo "==> restarting: $SERVICE"
+# shellcheck disable=SC2086  -- intentional word-splitting: $SERVICE is a unit list
+sudo systemctl restart $SERVICE
 sleep 3
-if systemctl is-active --quiet "$SERVICE"; then
-    echo "==> $SERVICE active. Deploy complete at ${NEW_REV:0:8}."
-    echo "    tail logs:  journalctl -u $SERVICE -f"
-else
-    echo "!! $SERVICE did NOT come up. Recent log:"
-    journalctl -u "$SERVICE" -n 30 --no-pager
-    echo "!! Code is at $NEW_REV. Investigate before assuming the wall is live."
+FAILED=""
+for unit in $SERVICE; do
+    if systemctl is-active --quiet "$unit"; then
+        echo "==> $unit active."
+    else
+        echo "!! $unit did NOT come up. Recent log:"
+        journalctl -u "$unit" -n 30 --no-pager
+        FAILED="$FAILED $unit"
+    fi
+done
+if [ -n "$FAILED" ]; then
+    echo "!! Code is at $NEW_REV but these units are down:$FAILED"
+    echo "!! Investigate before assuming the wall is live."
     exit 1
 fi
+echo "==> all units active. Deploy complete at ${NEW_REV:0:8}."
+echo "    tail logs:  journalctl -u ${SERVICE%% *} -f"
