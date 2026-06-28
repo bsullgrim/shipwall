@@ -254,7 +254,7 @@ void drawEmmett() {
   // 1) green dithered field (deterministic hash, identical to the JS)
   for (int y = 0; y < PANEL_H; y++)
     for (int x = 0; x < PANEL_W; x++) {
-      uint32_t r = ((uint32_t)(x * 73856093) ^ (uint32_t)(y * 19349663));
+      uint32_t r = (((uint32_t)x * 73856093u) ^ ((uint32_t)y * 19349663u));
       if ((r % 83) == 0)            E_PX(x, y, EC_DARK);
       else if (((x + y) & 1))       E_PX(x, y, EC_ALT);
       else                          E_PX(x, y, EC_BASE);
