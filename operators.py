@@ -34,7 +34,18 @@ OPERATOR_CODES = {
     "BRIESE": "BRS", "CCG": "CCG", "GRANATH": "GRA", "CARISBROOKE": "CAR",
     "TBMARINE": "TBM", "COASTAL": "CST", "GROUPOCEAN": "OCN",
     "NEAS": "NEA", "BIGLIFT": "BLF", "RCN": "RCN",
-    "USESPA": "EPA",
+    "USESPA": "EPA", "USCG": "USC",
+    # --- Operators from the Ship_Log_V2 import that have NO sprite yet. ---
+    # Vessels resolve to these keys today (board shows the code); make the
+    # sprite later and the funnel chip lights up with no other change.
+    "SCHULTE": "SCH", "BROSTROM": "BRO", "REHDER": "RHD", "CENTRALMAR": "CMR",
+    "CLEARWATER": "CLW", "DSHIP": "DSH", "DANNOCEAN": "DAN", "DEANMARINE": "DMR",
+    "FCC": "FCC", "FORESTWAVE": "FWV", "FRANCO": "FRC", "GENESIS": "GEN",
+    "HANSA": "HAN", "HARREN": "HRN", "DAUELSBERG": "DBG", "IVER": "IVR",
+    "KEYLAKES": "KEY", "MINERALIEN": "MIN", "MCNALLY": "MNL", "NORDIC": "NOR",
+    "DOHLE": "DOH", "PICTON": "PIC", "SAL": "SAL", "SARGEANT": "SGT",
+    "SARTER": "SRT", "SLOMAN": "SLO", "SLCRUISE": "SLC", "SUNSHIP": "SUN",
+    "TORONTOTT": "TTT", "VALLOEBY": "VAL",
     "UNKNOWN": "???",
 }
 
@@ -67,6 +78,10 @@ NAME_PREFIX_RULES = [
     # --- learned from observed sightings (only where they map to a sprite) ---
     ("MCASPHALT","MCASPHALT"), # "MCASPHALT ADVANTAGE" -- name carries the operator
     ("BBC ",     "BRIESE"),
+    # --- from Ship_Log_V2 import: operator word appears in the real AIS name ---
+    ("NACC ",    "NACC"),       # NACC Quebec, NACC Argonaut, ...
+    ("HAPPY ",   "BIGLIFT"),    # Happy River / Rover / Ranger (BigLift)
+    ("MCKEIL ",  "MCKEIL"),     # some McKeil vessels broadcast the operator name
 ]
 
 # Fleets whose ship names have NO clean prefix, so name-matching can't identify
@@ -76,6 +91,14 @@ NAME_PREFIX_RULES = [
 # observed sightings -- e.g. a season log of vessels seen on the river.
 _MMSI_ONLY_OPERATORS = (
     "ANDRIE", "CLIFFS", "G3", "GLF", "HOLCIM", "MCASPHALT", "NACC", "VTB",
+    # No-clean-prefix fleets from the Ship_Log_V2 import. Their vessels resolve
+    # via the exact ship-name table (ship_to_operator.json) until/unless a name
+    # prefix or MMSI mapping is added. Sprite keys here may be placeholders.
+    "INTERLAKE", "SCHULTE", "BROSTROM", "REHDER", "CENTRALMAR", "CLEARWATER",
+    "DSHIP", "DANNOCEAN", "DEANMARINE", "FCC", "FORESTWAVE", "FRANCO",
+    "GENESIS", "HANSA", "HARREN", "DAUELSBERG", "IVER", "KEYLAKES",
+    "MINERALIEN", "MCNALLY", "NORDIC", "DOHLE", "PICTON", "SAL", "SARGEANT",
+    "SARTER", "SLOMAN", "SLCRUISE", "SUNSHIP", "TORONTOTT", "VALLOEBY",
 )
 
 
