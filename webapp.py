@@ -109,7 +109,61 @@ def panel_page():
             .replace("%SPRITE_SIZE%", str(SPRITE_SIZE))
             .replace("%FONT%", json.dumps(FONT))
             .replace("%EMMETT%", json.dumps(EMMETT_DATA)))
+    html = _inject_head(html, PANEL_MOBILE_CSS)
     return html.replace("</body>", OFFLINE_BANNER + "</body>")
+
+
+# --- Mobile fit-to-width overrides, injected into each iframe page -----------
+# Kept here (not in register_panel.py / passage_stats.py) so those files stay
+# pure desktop dev tools; the site-framing concern lives entirely in webapp.py,
+# same as the offline banner. Each block is spliced in just before </head> so it
+# overrides the page's own earlier rules by source order.
+
+def _inject_head(html, css):
+    """Splice a <style> override in just before </head> (falls back to prepending
+    if the page somehow has no </head>)."""
+    block = "<style>" + css + "</style>"
+    if "</head>" in html:
+        return html.replace("</head>", block + "</head>", 1)
+    return block + html
+
+
+# The panel page hardcodes a 768x384 canvas (#panel). On a phone that overflows
+# sideways. Make it scale to the viewport width while preserving the 2:1 aspect
+# ratio and the crisp pixelated upscaling. Also kill the body's top padding and
+# horizontal overflow so nothing spills past the screen edge.
+PANEL_MOBILE_CSS = """
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden}
+  body{padding-top:8px !important}
+  #panel{
+    width:100% !important;
+    max-width:768px !important;
+    height:auto !important;
+    aspect-ratio:2 / 1;
+    margin:8px auto !important;
+    image-rendering:pixelated;
+  }
+  h3{font-size:14px;padding:0 8px;margin:6px 0}
+  #meta{padding:0 8px;word-break:break-word}
+"""
+
+
+# The stats page (passage_stats.py) renders leaderboard tables/cards laid out for
+# desktop width. Force everything to fit the viewport: box-sizing so padding
+# doesn't push width past 100%, tables that lay out within the screen, long words
+# allowed to wrap, and any genuinely-wide table gets horizontal scroll rather
+# than blowing out the whole page.
+STATS_MOBILE_CSS = """
+  *{box-sizing:border-box}
+  html,body{max-width:100%;overflow-x:hidden;margin:0}
+  body{padding-left:10px;padding-right:10px}
+  table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse}
+  td,th{word-break:break-word;overflow-wrap:anywhere}
+  img,canvas,svg{max-width:100%;height:auto}
+  pre,code{white-space:pre-wrap;word-break:break-word}
+  /* containers commonly used for layout -- keep them within the viewport */
+  div,section,header,main{max-width:100%}
+"""
 
 
 def stats_payload():
@@ -143,20 +197,32 @@ SHELL = """<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
 <style>
   :root{color-scheme:dark}
-  html,body{margin:0;height:100%;background:#0e1116;color:#d8dee9;
-    font-family:system-ui,-apple-system,sans-serif}
-  header{padding:10px 14px 0}
-  h1{font-size:18px;margin:0 0 2px}
-  .sub{color:#6e7b8c;font-size:12px;margin-bottom:8px}
+  /* Flex column: header takes its natural height, the frame area fills the rest.
+     100dvh (dynamic viewport height) tracks the mobile address bar instead of
+     the broken 100vh; vh is a fallback for older browsers. */
+  html,body{margin:0;background:#0e1116;color:#d8dee9;
+    font-family:system-ui,-apple-system,sans-serif;
+    -webkit-text-size-adjust:100%}
+  body{display:flex;flex-direction:column;height:100vh;height:100dvh}
+  header{padding:8px 12px 0;flex:0 0 auto}
+  h1{font-size:17px;margin:0 0 2px;line-height:1.2}
+  .sub{color:#6e7b8c;font-size:12px;margin:0 0 8px;line-height:1.25}
   .tabs{display:flex;gap:6px}
-  .tabs button{background:#141a22;color:#9aa7b6;border:1px solid #1d2530;
+  /* flex:1 makes the two tabs split the width evenly and stay tappable */
+  .tabs button{flex:1 1 0;background:#141a22;color:#9aa7b6;border:1px solid #1d2530;
     border-top-left-radius:8px;border-top-right-radius:8px;border-bottom:none;
-    padding:9px 18px;font-size:14px;cursor:pointer}
+    padding:11px 14px;font-size:15px;cursor:pointer;
+    min-height:44px;-webkit-tap-highlight-color:transparent}
   .tabs button.on{background:#0e1116;color:#cfe6ff;border-color:#2a4a6e}
-  .frame-wrap{position:absolute;top:96px;left:0;right:0;bottom:0;
-    border-top:1px solid #1d2530}
-  iframe{width:100%;height:100%;border:0;background:#0e1116}
+  .frame-wrap{flex:1 1 auto;min-height:0;border-top:1px solid #1d2530}
+  iframe{width:100%;height:100%;border:0;background:#0e1116;display:block}
   iframe.hide{display:none}
+  /* Narrow screens: shorten the subtitle and trim chrome to claw back height */
+  @media (max-width:480px){
+    h1{font-size:16px}
+    .sub{font-size:11px}
+    header{padding:6px 10px 0}
+  }
 </style></head><body>
 <header>
   <h1>St. Lawrence Ship Wall</h1>
@@ -218,7 +284,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/panel":
             self._send(200, panel_page().encode())
         elif self.path == "/stats":
-            self._send(200, STATS_PAGE.encode())
+            self._send(200, _inject_head(STATS_PAGE, STATS_MOBILE_CSS).encode())
         elif self.path == "/latest":
             with _lock:
                 payload = json.dumps(_latest).encode()
