@@ -1,10 +1,10 @@
 {
-  "generated": "2026-06-08T18:42:18",
+  "generated": "2026-06-28T16:11:57",
   "totals": {
-    "sightings": 3800,
-    "distinct_ships": 731,
-    "distinct_fleets": 283,
-    "one_timers": 330,
+    "sightings": 4323,
+    "distinct_ships": 806,
+    "distinct_fleets": 290,
+    "one_timers": 359,
     "span": "2016–2026"
   },
   "exotics": [
@@ -206,18 +206,44 @@
       "name": "G3 Marquis",
       "comment": "First boat for James",
       "date": "2020-07-09",
-      "year": 2020
+      "year": 2020,
+      "observer": "home"
     },
     {
       "name": "Iver Ambition",
       "comment": "Emma's first ship",
       "date": "2025-06-29",
-      "year": 2025
+      "year": 2025,
+      "observer": "home"
     }
   ],
   "busiest_days": [
     {
+      "date": "2021-06-16",
+      "count": 14
+    },
+    {
+      "date": "2022-04-10",
+      "count": 14
+    },
+    {
+      "date": "2022-05-29",
+      "count": 14
+    },
+    {
+      "date": "2022-06-05",
+      "count": 14
+    },
+    {
       "date": "2017-07-04",
+      "count": 13
+    },
+    {
+      "date": "2021-07-25",
+      "count": 13
+    },
+    {
+      "date": "2022-05-28",
       "count": 13
     },
     {
@@ -225,36 +251,12 @@
       "count": 12
     },
     {
-      "date": "2021-07-25",
-      "count": 11
+      "date": "2022-05-30",
+      "count": 12
     },
     {
-      "date": "2021-08-09",
-      "count": 11
-    },
-    {
-      "date": "2022-10-31",
-      "count": 11
-    },
-    {
-      "date": "2024-05-14",
-      "count": 11
-    },
-    {
-      "date": "2025-05-10",
-      "count": 11
-    },
-    {
-      "date": "2020-07-06",
-      "count": 10
-    },
-    {
-      "date": "2021-06-16",
-      "count": 10
-    },
-    {
-      "date": "2021-08-01",
-      "count": 10
+      "date": "2022-06-27",
+      "count": 12
     }
   ],
   "lifers_per_year": [
@@ -268,102 +270,872 @@
     },
     {
       "year": "2018",
-      "new": 47
+      "new": 45
     },
     {
       "year": "2019",
-      "new": 41
+      "new": 39
     },
     {
       "year": "2020",
-      "new": 50
+      "new": 89
     },
     {
       "year": "2021",
-      "new": 77
+      "new": 95
     },
     {
       "year": "2022",
-      "new": 91
+      "new": 117
     },
     {
       "year": "2023",
-      "new": 50
+      "new": 46
     },
     {
       "year": "2024",
-      "new": 101
+      "new": 97
     },
     {
       "year": "2025",
-      "new": 74
+      "new": 70
     },
     {
       "year": "2026",
-      "new": 49
+      "new": 57
     }
   ],
   "rarities_sample": [
-    "ASG Kherson",
     "Abb Vanessa",
     "Adriaticborg",
     "Aida Blue",
     "Aidablu",
     "Alamosborg",
     "Alanc",
-    "Alangova",
     "Alanis",
     "Alinas",
     "American Patriot",
     "American Victory",
     "Amstelborg",
+    "Andrie Samuel De Champlain",
     "Annette A Desgagnes",
     "Annette Desgagnes",
     "Arcadia",
     "Arcadia Desgagnes",
     "Arctic",
     "Argentia Desganes",
+    "ASG Kherson",
     "Aspendos Seaways",
-    "Assiniboine",
     "Astrid Maersk",
     "Atlanticborg",
     "Auriga Leader",
     "Avonborg",
     "Azoreborg",
-    "Azoresborg",
+    "Bandura",
     "BBC Alabama",
     "BBC Alberta",
     "BBC Arizona",
     "BBC Arkhangelsk",
-    "BBC Austria",
     "BBC Brazil",
     "BBC Campana",
     "BBC Dubai",
+    "BBC Echo",
+    "BBC Edge",
     "BBC Elbe",
+    "BBC Florida",
     "BBC Greenland",
     "BBC Hudson",
+    "BBC Leda",
     "BBC Manila",
     "BBC Mississippi",
+    "BBC Norfolk",
     "BBC Polonia",
+    "BBC Rio Grande",
     "BBC Russia",
     "BBC Skipper",
+    "BBC Song",
     "BBC Thames",
     "BBC Tokyo",
+    "BBC Ukraine",
     "BBC Volga",
     "BBC Wisconsin",
-    "Bandura",
     "Beautrader",
     "Belitaki",
     "Billie",
     "Birgit Knutsen",
     "Black Pearl",
     "Blue Star Delos",
-    "Brattingsborg",
-    "Brinn Courtney",
-    "Bristol Bay",
-    "Britannia",
-    "CG Sequoia",
-    "CMA CGM Cayenne"
+    "Brattingsborg"
   ],
-  "rarities_total": 330
+  "rarities_total": 359,
+  "rarities_credited": [
+    {
+      "name": "Abb Vanessa",
+      "observer": "home"
+    },
+    {
+      "name": "Adriaticborg",
+      "observer": "home"
+    },
+    {
+      "name": "Aida Blue",
+      "observer": "home"
+    },
+    {
+      "name": "Aidablu",
+      "observer": "home"
+    },
+    {
+      "name": "Alamosborg",
+      "observer": "home"
+    },
+    {
+      "name": "Alanc",
+      "observer": "home"
+    },
+    {
+      "name": "Alanis",
+      "observer": "home"
+    },
+    {
+      "name": "Alinas",
+      "observer": "home"
+    },
+    {
+      "name": "American Patriot",
+      "observer": "home"
+    },
+    {
+      "name": "American Victory",
+      "observer": "home"
+    },
+    {
+      "name": "Amstelborg",
+      "observer": "home"
+    },
+    {
+      "name": "Andrie Samuel De Champlain",
+      "observer": "emmett"
+    },
+    {
+      "name": "Annette A Desgagnes",
+      "observer": "home"
+    },
+    {
+      "name": "Annette Desgagnes",
+      "observer": "home"
+    },
+    {
+      "name": "Arcadia",
+      "observer": "home"
+    },
+    {
+      "name": "Arcadia Desgagnes",
+      "observer": "home"
+    },
+    {
+      "name": "Arctic",
+      "observer": "home"
+    },
+    {
+      "name": "Argentia Desganes",
+      "observer": "home"
+    },
+    {
+      "name": "ASG Kherson",
+      "observer": "home"
+    },
+    {
+      "name": "Aspendos Seaways",
+      "observer": "home"
+    },
+    {
+      "name": "Astrid Maersk",
+      "observer": "home"
+    },
+    {
+      "name": "Atlanticborg",
+      "observer": "home"
+    },
+    {
+      "name": "Auriga Leader",
+      "observer": "home"
+    },
+    {
+      "name": "Avonborg",
+      "observer": "home"
+    },
+    {
+      "name": "Azoreborg",
+      "observer": "home"
+    },
+    {
+      "name": "Bandura",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Alabama",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Alberta",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Arizona",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Arkhangelsk",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Brazil",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Campana",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Dubai",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Echo",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Edge",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Elbe",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Florida",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Greenland",
+      "observer": "both"
+    },
+    {
+      "name": "BBC Hudson",
+      "observer": "both"
+    },
+    {
+      "name": "BBC Leda",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Manila",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Mississippi",
+      "observer": "both"
+    },
+    {
+      "name": "BBC Norfolk",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Polonia",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Rio Grande",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Russia",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Skipper",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Song",
+      "observer": "emmett"
+    },
+    {
+      "name": "BBC Thames",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Tokyo",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Ukraine",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Volga",
+      "observer": "home"
+    },
+    {
+      "name": "BBC Wisconsin",
+      "observer": "home"
+    },
+    {
+      "name": "Beautrader",
+      "observer": "home"
+    },
+    {
+      "name": "Belitaki",
+      "observer": "home"
+    },
+    {
+      "name": "Billie",
+      "observer": "home"
+    },
+    {
+      "name": "Birgit Knutsen",
+      "observer": "home"
+    },
+    {
+      "name": "Black Pearl",
+      "observer": "home"
+    },
+    {
+      "name": "Blue Star Delos",
+      "observer": "home"
+    },
+    {
+      "name": "Brattingsborg",
+      "observer": "home"
+    }
+  ],
+  "corridor": [
+    {
+      "waypoint": "Soo Locks",
+      "count": 8,
+      "ordinal": 0
+    },
+    {
+      "waypoint": "St Marys River",
+      "count": 32,
+      "ordinal": 1
+    },
+    {
+      "waypoint": "Port Dolomite",
+      "count": 1,
+      "ordinal": 2
+    },
+    {
+      "waypoint": "De Tour",
+      "count": 4,
+      "ordinal": 3
+    },
+    {
+      "waypoint": "Lake Michigan",
+      "count": 1,
+      "ordinal": 5
+    },
+    {
+      "waypoint": "Lake Huron",
+      "count": 8,
+      "ordinal": 6
+    },
+    {
+      "waypoint": "Dunbar Park",
+      "count": 2,
+      "ordinal": 7
+    },
+    {
+      "waypoint": "Port Huron",
+      "count": 6,
+      "ordinal": 8
+    },
+    {
+      "waypoint": "St Clair River",
+      "count": 22,
+      "ordinal": 9
+    },
+    {
+      "waypoint": "Lake St Clair",
+      "count": 1,
+      "ordinal": 10
+    },
+    {
+      "waypoint": "Detroit River",
+      "count": 40,
+      "ordinal": 11
+    },
+    {
+      "waypoint": "S Dock Rd",
+      "count": 2,
+      "ordinal": 14
+    },
+    {
+      "waypoint": "Rotary Park",
+      "count": 1,
+      "ordinal": 15
+    },
+    {
+      "waypoint": "Traverse City",
+      "count": 1,
+      "ordinal": 16
+    },
+    {
+      "waypoint": "Brockville Narrows",
+      "count": 2,
+      "ordinal": 17
+    },
+    {
+      "waypoint": "Cedar Ledge",
+      "count": 4192,
+      "ordinal": 18
+    }
+  ],
+  "transit_chains": [
+    {
+      "ship": "American Mariner",
+      "waypoints": [
+        "St Marys River",
+        "St Clair River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 4,
+      "reaches_home": true
+    },
+    {
+      "ship": "John D Leitch",
+      "waypoints": [
+        "Soo Locks",
+        "St Marys River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 4,
+      "reaches_home": true
+    },
+    {
+      "ship": "Manitoulin",
+      "waypoints": [
+        "St Marys River",
+        "De Tour",
+        "Lake Michigan",
+        "Cedar Ledge"
+      ],
+      "span": 4,
+      "reaches_home": true
+    },
+    {
+      "ship": "Dirk S Vanenkevort",
+      "waypoints": [
+        "St Marys River",
+        "Lake Huron",
+        "St Clair River",
+        "Detroit River"
+      ],
+      "span": 4,
+      "reaches_home": false
+    },
+    {
+      "ship": "Paul R Tregurtha",
+      "waypoints": [
+        "Soo Locks",
+        "St Marys River",
+        "Lake Huron",
+        "Dunbar Park"
+      ],
+      "span": 4,
+      "reaches_home": false
+    },
+    {
+      "ship": "Algoma Conveyor",
+      "waypoints": [
+        "St Clair River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "Algoma Innovator",
+      "waypoints": [
+        "Soo Locks",
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "Algoma Intrepid",
+      "waypoints": [
+        "Detroit River",
+        "S Dock Rd",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL Assiniboine",
+      "waypoints": [
+        "Port Huron",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL Laurentien",
+      "waypoints": [
+        "St Clair River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL Niagara",
+      "waypoints": [
+        "Port Huron",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL Welland",
+      "waypoints": [
+        "St Marys River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "Rt Hon Paul J Martin",
+      "waypoints": [
+        "Soo Locks",
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "Saginaw",
+      "waypoints": [
+        "St Marys River",
+        "Port Huron",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "Whitefish Bay",
+      "waypoints": [
+        "St Clair River",
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 3,
+      "reaches_home": true
+    },
+    {
+      "ship": "American Steamship Company Burns Harbor",
+      "waypoints": [
+        "St Marys River",
+        "De Tour",
+        "S Dock Rd"
+      ],
+      "span": 3,
+      "reaches_home": false
+    },
+    {
+      "ship": "James R Barker",
+      "waypoints": [
+        "Soo Locks",
+        "St Marys River",
+        "Port Huron"
+      ],
+      "span": 3,
+      "reaches_home": false
+    },
+    {
+      "ship": "Key Lakes John G Munson",
+      "waypoints": [
+        "St Marys River",
+        "Port Dolomite",
+        "Detroit River"
+      ],
+      "span": 3,
+      "reaches_home": false
+    },
+    {
+      "ship": "Algoma Equinox",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Algoma Harvester",
+      "waypoints": [
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Algoma Transport",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Algosea",
+      "waypoints": [
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Argentia Desgagnes",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Atlantic Huron",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Barnacle",
+      "waypoints": [
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "CCG Limnos",
+      "waypoints": [
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL St Laurent",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "CSL Tadoussac",
+      "waypoints": [
+        "De Tour",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Canfornav Chesnut",
+      "waypoints": [
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Captain Henry Jackman",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Damia Desgagnes",
+      "waypoints": [
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Eeborg",
+      "waypoints": [
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Federal Barents",
+      "waypoints": [
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Federal Weser",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Frontenac",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Gaia Desgagnes",
+      "waypoints": [
+        "Brockville Narrows",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Great Republic",
+      "waypoints": [
+        "St Marys River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "HHL Nunalik",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Happy Rover",
+      "waypoints": [
+        "Detroit River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    },
+    {
+      "ship": "Harbour Feature",
+      "waypoints": [
+        "St Clair River",
+        "Cedar Ledge"
+      ],
+      "span": 2,
+      "reaches_home": true
+    }
+  ],
+  "transit_chains_total": 61,
+  "observers": {
+    "tally": {
+      "home": {
+        "sightings": 3851,
+        "distinct_ships": 725
+      },
+      "emmett": {
+        "sightings": 673,
+        "distinct_ships": 278
+      }
+    },
+    "buckets": {
+      "home_only": 528,
+      "emmett_only": 81,
+      "both": 197
+    },
+    "emmett_exclusive_sample": [
+      "American Steamship Company American Century",
+      "American Steamship Company American Spirit",
+      "American Steamship Company Burns Harbor",
+      "American Steamship Company Indiana Harbor",
+      "American Steamship Company Walter J McArthy",
+      "Andrie GL Ostrander",
+      "Andrie Samuel De Champlain",
+      "BBC Echo",
+      "BBC Edge",
+      "BBC Florida",
+      "BBC Leda",
+      "BBC Norfolk",
+      "BBC Rio Grande",
+      "BBC Song",
+      "BBC Tennessee",
+      "Canfornav Chesnut",
+      "Canfornav Greenwig",
+      "Caroline McKee",
+      "CCG Amundsen",
+      "CCG Cove Isle",
+      "CCG Griffon",
+      "CCG Ile St Ours",
+      "CCG Limnos",
+      "CCG Pierre Radisson",
+      "CCG Samuel Risley",
+      "Central Marine Joseph L Block",
+      "Chun He 195",
+      "Clyde S Vanenkevort",
+      "CSL Laurentien",
+      "D Ship Carriers Keith",
+      "D Ship Carriers Ronnie",
+      "Dirk S Vanenkevort",
+      "Dorothy Ann",
+      "Elizabeth Schulte",
+      "Federal Margaree",
+      "Federal Oshina",
+      "Fulmar P740 (French Coast Guard)",
+      "Genesis Vigilant",
+      "Grand River Navigation American Courage",
+      "Grand River Navigation Olive L Moore"
+    ],
+    "emmett_exclusive_total": 81
+  }
 }

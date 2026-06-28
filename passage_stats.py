@@ -433,6 +433,57 @@ function renderFun(c){
        f.rarities_sample.map(esc).join(' &middot; ')+
        (f.rarities_total>f.rarities_sample.length?' &hellip;':'')+'</div>';
   }
+
+  // --- Observer scoreboard (two-observer mode) ---
+  if(f.observers){
+    const ob=f.observers, t=ob.tally, b=ob.buckets;
+    h+='<h2>Two-observer Cedar Ledge</h2>';
+    h+='<div class=tot>'+
+      '<div><b>'+b.both+'</b><span>seen by both</span></div>'+
+      '<div><b>'+b.home_only+'</b><span>only you</span></div>'+
+      '<div><b>'+b.emmett_only+'</b><span>only Emmett</span></div></div>';
+    if(t&&t.home&&t.emmett){
+      h+='<table><tr><th></th><th class=num>Sightings</th><th class=num>Distinct</th></tr>'+
+        '<tr><td class=big>You</td><td class=num>'+t.home.sightings+'</td><td class=num>'+t.home.distinct_ships+'</td></tr>'+
+        '<tr><td class=big>Emmett</td><td class=num>'+t.emmett.sightings+'</td><td class=num>'+t.emmett.distinct_ships+'</td></tr></table>';
+    }
+    if(ob.emmett_exclusive_sample&&ob.emmett_exclusive_sample.length){
+      h+='<h2>Caught by Emmett <span style="color:#6e7b8c;font-weight:400">('+
+         ob.emmett_exclusive_total+' hulls only he logged)</span></h2>'+
+         '<div style="color:#9aa7b6;line-height:1.7">'+
+         ob.emmett_exclusive_sample.map(esc).join(' &middot; ')+
+         (ob.emmett_exclusive_total>ob.emmett_exclusive_sample.length?' &hellip;':'')+'</div>';
+    }
+  }
+
+  // --- Corridor strip (where Emmett caught them, lakehead -> home) ---
+  if(f.corridor && f.corridor.length>1){
+    const mx=Math.max(...f.corridor.map(w=>w.count));
+    h+='<h2>Sighting corridor <span style="color:#6e7b8c;font-weight:400">(upbound &rarr; the wall)</span></h2><table>';
+    for(const w of f.corridor){
+      const bw=Math.max(2,Math.round(w.count/mx*180));
+      const home=(w.waypoint==='Cedar Ledge');
+      h+='<tr><td style="white-space:nowrap'+(home?';color:#e8b84b':'')+'">'+esc(w.waypoint)+'</td>'+
+         '<td style="width:100%"><span style="display:inline-block;height:11px;'+
+         'background:'+(home?'#e8b84b':'#3a7bbf')+';border-radius:2px;width:'+bw+'px;vertical-align:middle"></span> '+
+         '<span class=num>'+w.count+'</span></td></tr>';
+    }
+    h+='</table>';
+  }
+
+  // --- Transit chains (same hull logged at multiple waypoints) ---
+  if(f.transit_chains && f.transit_chains.length){
+    h+='<h2>Transit chains <span style="color:#6e7b8c;font-weight:400">('+
+       f.transit_chains_total+' hulls tracked down the system)</span></h2><table>';
+    for(const ch of f.transit_chains){
+      const path=ch.waypoints.map(w=>w==='Cedar Ledge'?
+        '<span style="color:#e8b84b">'+esc(w)+'</span>':esc(w)).join(' <span style="color:#55617a">&rarr;</span> ');
+      h+='<tr><td class=big style="white-space:nowrap;vertical-align:top">'+esc(ch.ship)+'</td>'+
+         '<td>'+path+'</td></tr>';
+    }
+    h+='</table>';
+  }
+
   c.innerHTML=h;
 }
 function renderYear(){
