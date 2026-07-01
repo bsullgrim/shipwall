@@ -230,16 +230,20 @@ def dir_from_dest(lat, lon, dest):
 # --- Passage detection (crossings of Danger Island) --------------------------
 # Track each MMSI's last river-progress + time; when a new sighting lands on the
 # opposite side of HOME_PROGRESS, the ship transited past us.
-_last_progress = {}            # mmsi -> (progress, observed_time)
+import crossing                 # shared confirmed-crossing detector (repo root)
+
+# Per-MMSI rolling history of recent (observed_time, progress) fixes. Replaces
+# the old single-previous _last_progress: confirming a crossing means seeing the
+# ship *stay* on the new side, which needs more than one prior point.
+_recent_fixes = {}             # mmsi -> [(t, p), ...] newest last
+_RECENT_MAX = 8                # fixes kept per ship; ample for confirmation
+CROSSING_MARGIN = 0.02         # dead-band half-width around HOME (progress units)
+MAX_CROSSING_GAP_S = int(os.getenv("MAX_CROSSING_GAP_S", str(24 * 3600)))
 _passage_header_written = False
-# Guard against logging the same crossing repeatedly when a ship lingers or
-# its AIS position jitters back and forth across HOME_PROGRESS. Keyed on
-# (mmsi, day, direction) -- the same key the startup backfill de-dupes on.
-_logged_passages = set()# (mmsi, direction) -> sorted list of crossing epochs already logged.
-# A new crossing is a duplicate of an existing one when its interpolated
-# crossing time falls within DEDUP_WINDOW_SECS of one already recorded --
-# tolerant of the interpolated time landing on a different calendar day when
-# one detection bridged a long feed gap and another saw the real adjacent fixes.
+
+# De-dupe already-logged crossings by a time window, so a crossing whose
+# interpolated time lands on a different calendar day than another detection of
+# it isn't logged twice. (mmsi, direction) -> list of crossing epochs recorded.
 _logged_passages = {}
 DEDUP_WINDOW_SECS = 6 * 3600   # one transit per ship/direction per ~6h
 
@@ -302,42 +306,31 @@ def _log_passage(mmsi, name, op, direction, t_before, p_before, t_after, p_after
 
 
 def check_passage(mmsi, lat, lon, observed, name, op):
-    """Detect a crossing of HOME_PROGRESS between consecutive sightings."""
+    """Log a *confirmed* crossing of HOME_PROGRESS. A crossing counts only once
+    the ship is established on the new side (a second consecutive fix past the
+    margin), so a single jittery/duplicate fix projected across HOME no longer
+    fabricates a reversal. Straddles longer than MAX_CROSSING_GAP_S are rejected
+    as two unrelated appearances rather than a transit."""
     if not PASSAGE_LOG or HOME_PROGRESS is None:
         return
     p = river_progress(lat, lon)
     if p is None:
         return
-    prev = _last_progress.get(mmsi)
-    _last_progress[mmsi] = (p, observed)
-    if prev is None:
-        return
-    p_prev, t_prev = prev
-    # Crossed the home point if the two sightings straddle HOME_PROGRESS. Require
-    # the ship to be clearly on each side (beyond a small margin), so a vessel
-    # moored or drifting right at the line doesn't log phantom crossings from
-    # position jitter -- it must move decisively across.
-    M = 0.02
-    direction = None
-    if p_prev < HOME_PROGRESS - M and p > HOME_PROGRESS + M:
-        direction = "downbound"
-    elif p_prev > HOME_PROGRESS + M and p < HOME_PROGRESS - M:
-        direction = "upbound"
-    if not direction:
-        return
-    # De-dupe: one logged crossing per ship per day per direction. Without this,
-    # a ship that lingers or whose position jitters across HOME_PROGRESS logs the
-    # same passage over and over (creeping seen_after, same seen_before).
-    # Key on the *interpolated crossing* day -- not `observed` (= seen_after),
-    # which can roll past midnight and disagree with the day the backfill keys
-    # on, letting a restart re-log the same crossing.
-    t_pass = _passage_pass_time(t_prev, p_prev, observed, p)
-    if _passage_is_dup(mmsi, t_pass, direction):
-        return
-    _passage_remember(mmsi, t_pass, direction)
-    _log_passage(mmsi, name, op, direction, t_prev, p_prev, observed, p)
-
-
+    hist = _recent_fixes.setdefault(mmsi, [])
+    hist.append((observed, p))
+    if len(hist) > _RECENT_MAX:              # keep the window bounded, in order
+        del hist[:-_RECENT_MAX]
+    # Re-walk the small window each fix; already-logged crossings are skipped by
+    # the de-dupe guard, so re-emitting a confirmed one is harmless.
+    for c in crossing.find_confirmed_crossings(
+            hist, HOME_PROGRESS, CROSSING_MARGIN, MAX_CROSSING_GAP_S):
+        t_pass = _passage_pass_time(c["t_before"], c["p_before"],
+                                            c["t_after"], c["p_after"])
+        if _passage_is_dup(mmsi, t_pass, c["direction"]):
+            continue
+        _passage_remember(mmsi, t_pass, c["direction"])
+        _log_passage(mmsi, name, op, c["direction"],
+                    c["t_before"], c["p_before"], c["t_after"], c["p_after"])
 def bound_dir(cog, sog):
     """NE course = downbound (D, toward sea), SW = upbound (U), slow = moored
     (M). Returns '?' when we have no velocity data at all -- e.g. a vessel
@@ -731,7 +724,7 @@ def _seed_vessels_from_register():
         if PASSAGE_LOG and lat is not None and lon is not None:
             p = river_progress(lat, lon)
             if p is not None:
-                _last_progress[m] = (p, t)
+                _recent_fixes[m] = [(t, p)]
         seeded += 1
     prune()                       # drop any already older than the window
     if seeded:
@@ -1329,20 +1322,16 @@ def _backfill_passages_from_register():
                 name = nm
             if o and o != "UNKNOWN":
                 op = o
-        for (t0, p0, _, _), (t1, p1, _, _) in zip(pts, pts[1:]):
-            M = 0.02
-            direction = None
-            if p0 < HOME_PROGRESS - M and p1 > HOME_PROGRESS + M:
-                direction = "downbound"
-            elif p0 > HOME_PROGRESS + M and p1 < HOME_PROGRESS - M:
-                direction = "upbound"
-            if not direction:
+        points = [(t, p) for (t, p, _, _) in pts]
+        for c in crossing.find_confirmed_crossings(
+                points, HOME_PROGRESS, CROSSING_MARGIN, MAX_CROSSING_GAP_S):
+            t_pass = _passage_pass_time(c["t_before"], c["p_before"],
+                                        c["t_after"], c["p_after"])
+            if _passage_is_dup(mmsi, t_pass, c["direction"]):
                 continue
-            t_pass = _passage_pass_time(t0, p0, t1, p1)
-            if _passage_is_dup(mmsi, t_pass, direction):
-                continue
-            _passage_remember(mmsi, t_pass, direction)
-            _log_passage(mmsi, name, op or "UNKNOWN", direction, t0, p0, t1, p1)
+            _passage_remember(mmsi, t_pass, c["direction"])
+            _log_passage(mmsi, name, op, c["direction"],
+                         c["t_before"], c["p_before"], c["t_after"], c["p_after"])
             added += 1
     if added:
         print(f"[backfill] recovered {added} passage(s) from the register "
