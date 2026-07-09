@@ -35,13 +35,13 @@ except Exception:
 PORT = int(os.environ.get("STATS_PORT", "8090"))
 PASSAGE_LOG = os.environ.get("PASSAGE_LOG", "passages.csv").strip()
 FUN_STATS = os.environ.get("FUN_STATS", "fun_stats.json").strip()
-MMSI_DB = os.environ.get("MMSI_DB", "mmsi_db.json").strip()
+MMSI_DB = os.environ.get("MMSI_DB", "mmsi_database.json").strip()
 DEMO = False                       # set by --demo; serves built-in sample data
 
 # Read-time name healing. A passage row freezes the vessel name at the crossing
 # instant; if the AIS static (Type 5) message hadn't arrived yet, the name is
 # stored as "MMSI <n>". register_service.py records each vessel's real name in
-# mmsi_db.json as soon as it learns it, so we resolve placeholders against that
+# mmsi_database.json as soon as it learns it, so we resolve placeholders against that
 # map here -- the same read-time pattern used for operators -- without ever
 # rewriting passages.csv.
 _MMSI_NAME_RE = re.compile(r"^MMSI\s+(\d+)$")
