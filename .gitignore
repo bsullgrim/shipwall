@@ -53,3 +53,4 @@ register.bak.*.csv
 register.csv
 *.bak
 *.h.bak
+DEPLOYMENT.md

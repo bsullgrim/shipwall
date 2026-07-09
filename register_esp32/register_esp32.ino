@@ -104,6 +104,7 @@ struct {
   int   ageSecs;
   bool  hasSog, hasCog, hasNav;
 } emmett;
+#include "emmett_render.h"
 
 uint8_t  gBright   = 128;
 bool     gClosed   = false;
@@ -409,20 +410,6 @@ void drawDetail(int idx) {
   // River progress line along the very bottom: Lake Ontario (left) -> Montreal
   // (right), with the home tick (Danger Island) and the ship's position dot.
   drawRiverLine(s.hasProgress ? s.progress : NAN, gHome, s.dir, PANEL_H - 2);
-}
-
-void drawEmmett() {
-  textAt("WHERE'S EMMETT", 2, 0, C_ACCENT);
-  String nm = emmett.name; if (nm.length() > 20) nm = nm.substring(0, 20);
-  textAt(nm.c_str(), 2, 12, C_NAME);
-  char buf[24];
-  int y = 24;
-  snprintf(buf, sizeof(buf), "%.3f,%.3f", emmett.lat, emmett.lon);
-  textAt(buf, 2, y, C_VALUE); y += 10;
-  if (emmett.hasSog) { snprintf(buf, sizeof(buf), "SOG %.1f", emmett.sog); textAt(buf, 2, y, C_VALUE); y += 10; }
-  if (emmett.dest.length()) { textAt("DEST", 2, y, C_LABEL); textAt(emmett.dest.c_str(), 30, y, C_VALUE); y += 10; }
-  snprintf(buf, sizeof(buf), "%dm ago", emmett.ageSecs / 60);
-  textAt(buf, 2, y, C_DIM);
 }
 
 // ---- Setup / loop -----------------------------------------------------------

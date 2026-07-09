@@ -30,7 +30,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import register_service as rs   # reuse the EXACT geometry the live detector uses
-
+import crossing
 PASS_COLS = ["pass_time", "mmsi", "name", "operator", "direction",
              "seen_before", "seen_after", "gap_min"]
 
@@ -72,41 +72,36 @@ def load_sightings(path, since=None):
 
 
 def find_crossings(by_mmsi):
-    """Yield an inferred passage dict for each consecutive straddle of HOME."""
+    """Confirmed HOME straddles per vessel via the shared detector -- same
+    debounce + gap cap the live service uses. Drops the old no-margin
+    `p0 < HP <= p1` test, which was the most jitter-prone of the three paths."""
     HP = rs.HOME_PROGRESS
+    margin = getattr(rs, "CROSSING_MARGIN", crossing.DEFAULT_MARGIN)
+    max_gap = getattr(rs, "MAX_CROSSING_GAP_S", crossing.DEFAULT_MAX_GAP_S)
     out = []
     for mmsi, pts in by_mmsi.items():
-        # carry the best-known name/operator forward (later rows resolve them)
         name = op = ""
         for (t, p, nm, o) in pts:
             if nm:
                 name = nm
             if o and o != "UNKNOWN":
                 op = o
-        for (t0, p0, _, _), (t1, p1, _, _) in zip(pts, pts[1:]):
-            direction = None
-            if p0 < HP <= p1:
-                direction = "downbound"
-            elif p0 > HP >= p1:
-                direction = "upbound"
-            if not direction:
-                continue
-            span = p1 - p0
-            frac = (HP - p0) / span if span else 0.5
-            t_pass = t0 + frac * (t1 - t0)
+        points = [(t, p) for (t, p, _, _) in pts]
+        for c in crossing.find_confirmed_crossings(points, HP, margin, max_gap):
+            t_pass = rs._passage_pass_time(c["t_before"], c["p_before"],
+                                           c["t_after"], c["p_after"])
             out.append({
                 "pass_time": dt.datetime.fromtimestamp(t_pass).isoformat(timespec="seconds"),
                 "mmsi": mmsi,
                 "name": name or f"MMSI {mmsi}",
                 "operator": op or "UNKNOWN",
-                "direction": direction,
-                "seen_before": dt.datetime.fromtimestamp(t0).isoformat(timespec="seconds"),
-                "seen_after": dt.datetime.fromtimestamp(t1).isoformat(timespec="seconds"),
-                "gap_min": round((t1 - t0) / 60.0, 1),
+                "direction": c["direction"],
+                "seen_before": dt.datetime.fromtimestamp(c["t_before"]).isoformat(timespec="seconds"),
+                "seen_after": dt.datetime.fromtimestamp(c["t_after"]).isoformat(timespec="seconds"),
+                "gap_min": round((c["t_after"] - c["t_before"]) / 60.0, 1),
             })
     out.sort(key=lambda r: r["pass_time"])
     return out
-
 
 def existing_times(path):
     """(mmsi, direction) -> list of crossing epochs already present, so a new
