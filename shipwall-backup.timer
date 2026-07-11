@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the Ship Wall data backup on a schedule
+Documentation=https://github.com/bsullgrim/shipwall
+
+[Timer]
+# Every 3 hours, plus ~10 min after boot (so a reboot always gets a fresh
+# snapshot). Given the current card situation you may want this MORE often --
+# change to e.g. OnCalendar=hourly. It only commits when data actually changed,
+# so frequent runs on quiet nights cost almost nothing.
+OnBootSec=10min
+OnUnitActiveSec=3h
+
+# Don't stack runs if one is slow; skip missed runs rather than bursting.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
