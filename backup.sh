@@ -69,30 +69,51 @@ fi
 # --- copy each data file into the backup repo, if it reads cleanly ------------
 # cp can fail if the source is mid-write or (relevant here) corrupted on a bad
 # card. A failed copy must NOT abort the whole run -- back up whatever is good,
-# and loudly flag whatever isn't. We copy to a temp name first and only replace
-# the repo copy on success, so a failed/partial read never overwrites a
-# previously-good backup with garbage.
+# and loudly flag whatever isn't. We copy to a temp name first and CHECK IT FOR
+# CORRUPTION before replacing the repo copy, so neither a failed/partial read nor
+# a readable-but-corrupt file (null bytes -- the exact failure that hit
+# register.csv) can overwrite a previously-good backup with garbage.
 copied=0
 failed=()
+
+# True if the file contains NUL bytes (i.e. is corrupt). CSV/JSON data files are
+# text and must never contain a NUL; one means torn/corrupted content.
+has_nulls() {
+    [ "$(python3 - "$1" <<'PY'
+import sys
+print("NULL" if b"\x00" in open(sys.argv[1], "rb").read() else "OK")
+PY
+)" = "NULL" ]
+}
+
 for f in "${FILES[@]}"; do
     src="$SRC_DIR/$f"
     [ -e "$src" ] || { log "skip (absent): $f"; continue; }
     dst="$BACKUP_REPO/$f"
     tmp="$dst.tmp.$$"
-    if cp -- "$src" "$tmp" 2>/dev/null; then
-        mv -- "$tmp" "$dst"
-        copied=$((copied + 1))
-    else
+    if ! cp -- "$src" "$tmp" 2>/dev/null; then
         rm -f -- "$tmp" 2>/dev/null || true
         failed+=("$f")
-        log "WARNING: could not read $f (mid-write or corrupted?) -- kept previous backup"
+        log "WARNING: could not read $f (mid-write?) -- kept previous backup"
+        continue
     fi
+    # Refuse to commit a corrupt snapshot: if the copy has NUL bytes, discard it
+    # and KEEP the last known-good version already in the repo. This is the whole
+    # point -- a backup taken after corruption must not replace a clean one.
+    if has_nulls "$tmp"; then
+        rm -f -- "$tmp" 2>/dev/null || true
+        failed+=("$f")
+        log "WARNING: $f is CORRUPT (null bytes) -- NOT backing up, kept previous good copy"
+        continue
+    fi
+    mv -- "$tmp" "$dst"
+    copied=$((copied + 1))
 done
 
 if [ "${#failed[@]}" -gt 0 ]; then
-    log "!! ${#failed[@]} file(s) failed to copy: ${failed[*]}"
-    # On a healthy system this never happens; on a failing card it's the early
-    # warning. We still commit the files that DID copy.
+    log "!! ${#failed[@]} file(s) skipped (unreadable or corrupt): ${failed[*]}"
+    # On a healthy system this never happens; on a failing card / after a bad
+    # power-cut it's the early warning. We still commit the files that were clean.
 fi
 
 # --- commit only if something changed ----------------------------------------
@@ -107,7 +128,7 @@ fi
 summary="$(git diff --cached --stat | tail -1 | sed 's/^ *//')"
 msg="backup $(date -Iseconds) -- ${summary:-update}"
 if [ "${#failed[@]}" -gt 0 ]; then
-    msg="$msg [WARN: ${#failed[@]} file(s) unreadable: ${failed[*]}]"
+    msg="$msg [WARN: ${#failed[@]} file(s) skipped unreadable/corrupt: ${failed[*]}]"
 fi
 git commit -q -m "$msg"
 log "committed: $msg"
