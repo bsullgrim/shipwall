@@ -133,15 +133,29 @@ fi
 git commit -q -m "$msg"
 log "committed: $msg"
 
-# --- push (best-effort) ------------------------------------------------------
+# --- push (best-effort, self-healing on divergence) --------------------------
 if [ "$PUSH" = "1" ]; then
+    # First push attempt.
     if git push -q origin "$BRANCH" 2>/dev/null; then
         log "pushed to origin/$BRANCH"
     else
-        log "WARNING: push failed (network/credentials?). Commit is saved locally; will push next run."
-        # Not fatal: the local commit is safe, and the next successful run pushes
-        # this plus the new one. Don't exit non-zero just for a transient push
-        # failure, or the timer will report the unit as failed on every offline run.
+        # A push can be rejected simply because the remote has commits we don't
+        # (e.g. an edit made on the GitHub web UI, or a push from another machine).
+        # Without handling this, every subsequent run would keep failing and quietly
+        # pile up unpushed commits. Try to reconcile by rebasing our backup commits
+        # on top of the remote, then push again. This is safe here because this repo
+        # is a machine-generated backup destination -- our local commits are the
+        # authoritative data snapshots and just need to sit on top of whatever else
+        # landed remotely.
+        log "push rejected; attempting pull --rebase to reconcile divergence"
+        if git pull --rebase -q origin "$BRANCH" 2>/dev/null \
+           && git push -q origin "$BRANCH" 2>/dev/null; then
+            log "reconciled and pushed to origin/$BRANCH"
+        else
+            log "WARNING: push still failing after rebase (network down, auth, or a rebase conflict)."
+            log "         Commit(s) are saved locally and will retry next run. If this persists,"
+            log "         check: cd $BACKUP_REPO && git status && git push origin $BRANCH"
+        fi
     fi
 fi
 
