@@ -454,3 +454,200 @@ ssh-keygen -R shipwall.local      # and -R <pi-ip> if you connect by IP too
 This is the single most valuable section to have set up before you leave: remote
 access + remote reflash is the difference between "I can fix a typo from my
 laptop" and "I have to drive three hours."
+
+## 8. Corruption, recovery, and offsite backup — the day the card ate itself
+
+On **2026-07-11** the unit got unplugged (physical power-yank at the cottage). The power-cut corrupted a batch of files **mid-write** — source `.py` files, the entire `.venv`, and `register.csv` — injecting null bytes into files that were clean in git and on the last backup. The services crash-looped, `dmesg` threw EXT4 errors, and it looked exactly like a dying SD card. **It was not:** it was recoverable corruption, fixed entirely over SSH without a card swap. This is the runbook, because the next time should take ten minutes, not a day.
+
+**The meta-lesson first:** when a service won't start and something looks broken, the question is *which of three things it is* — **file corruption**, **hardware failure**, or a **git/config problem**. They look alike but have opposite fixes, and the worst move is to start restarting or restoring before you know. A restart destroys the journal that tells you what happened (see §7 persistent logs — have that on *before* you need it); restoring files onto a still-failing card is pointless.
+
+Read the error in `journalctl -u shipwall -n 30` and branch:
+
+| Error in the journal | Cause | Go to |
+|---|---|---|
+| `source code string cannot contain null bytes` / `UnicodeDecodeError: invalid continuation byte` | File corruption | 8a (card health), then 8c/8d |
+| `ModuleNotFoundError: No module named 'aiohttp'` | venv corrupt or missing | 8c (rebuild venv) |
+| `cannot execute binary file: Exec format error` on `.venv/bin/pip` | venv binaries corrupted | 8c (rebuild venv) |
+| Feed/board looks wrong but service runs | Usually **not** a fault, just a downtime gap | 8e |
+
+### 8a. Is the card FAILING, or just CORRUPTED? (the decisive test)
+
+This is the question the whole 2026-07-11 session hinged on, and we almost got it wrong. Power-cut corruption is repairable; a worn-out card is not.
+
+```bash
+# Recent filesystem errors? (errors ONLY at boot = normal recovery; recent = damage)
+sudo dmesg -T | grep -iE 'EXT4-fs error|I/O error|checksum invalid|Structure needs cleaning|Bad message' | tail -20
+
+# Did the kernel remount read-only to protect itself? (want: rw)
+mount | grep ' / ' | grep -oE 'r[ow]'
+
+# THE DECISIVE TEST -- can the card hold a LARGE synced write? A tiny write can
+# succeed on a dying card; 1.5MB forced to disk is the real test.
+cd /home/grims/shipwall
+python3 -c "open('cardtest.bin','w').write('x'*1500000)"
+sync
+python3 -c "d=open('cardtest.bin','rb').read(); print('readback:', 'CORRUPT' if b'\x00' in d else 'CLEAN', len(d))"
+rm -f cardtest.bin
+```
+
+**Verdict:** no recent dmesg errors + `rw` mount + large write survives `sync` = the card is **healthy**, this was corruption, restore in place. Recurring errors, or files that re-corrupt within minutes of being restored = the card is **failing**, plan a swap (8f). On 2026-07-11 the 1.5 MB test came back CLEAN — that's what proved it was the power-cut, not the hardware, and saved an unnecessary card swap.
+
+### 8b. Find which files are corrupted
+
+Power-cut corruption injects NUL bytes. Text files (`.py`/`.js`/`.csv`/`.json`) must never contain a NUL, so that's the detector:
+
+```bash
+cd /home/grims/shipwall
+
+# corrupt tracked source files:
+for f in $(git ls-files '*.py' '*.js'); do
+  python3 -c "import sys;sys.exit(1 if b'\x00' in open('$f','rb').read() else 0)" 2>/dev/null || echo "CORRUPT: $f"
+done
+
+# corrupt data files:
+for f in passages.csv register.csv mmsi_database.json ship_to_operator.json unknown_vessels.json fun_stats.json; do
+  [ -e "$f" ] && python3 -c "d=open('$f','rb').read(); print('$f:', 'CORRUPT' if b'\x00' in d else 'ok', len(d))"
+done
+
+# where are the nulls in one file? (end-clustered = a torn final write)
+python3 -c "d=open('register.csv','rb').read(); print('nulls',d.count(0),'first at',d.find(0),'of',len(d))"
+
+# a totally-corrupt file shows as 'data' not 'ASCII text':
+file font5x7.js
+```
+
+### 8c. Restore corrupted SOURCE files from git (and rebuild the venv)
+
+Code is on GitHub, so tracked files restore from the object store. **Gotcha we hit:** a plain `git checkout` *silently no-ops* on a null-corrupted file (git's index thinks it's current), leaving it corrupt. Force it, and fall back to writing clean bytes straight from the object store:
+
+```bash
+cd /home/grims/shipwall
+git fetch origin
+git checkout --force origin/main -- $(git ls-files '*.py' '*.js')
+
+# if any are STILL corrupt, bypass the index entirely:
+for f in $(git ls-files '*.py' '*.js'); do
+  python3 -c "import sys;sys.exit(1 if b'\x00' in open('$f','rb').read() else 0)" 2>/dev/null \
+    || { git cat-file -p "origin/main:$f" > "$f"; echo "rewrote $f"; }
+done
+
+# verify they're clean AND STAY clean (re-corruption = failing card):
+for f in $(git ls-files '*.py' '*.js'); do python3 -c "import sys;sys.exit(1 if b'\x00' in open('$f','rb').read() else 0)" 2>/dev/null || echo "STILL CORRUPT: $f"; done
+
+# Sanity-check GitHub itself isn't poisoned (deploy.sh committing mid-corruption
+# once pushed null bytes UP to origin -- then every clone/checkout restored garbage):
+git cat-file -p origin/main:register_service.py | python3 -c "import sys;d=sys.stdin.buffer.read();print('git has:','CORRUPT' if b'\x00' in d else 'CLEAN',len(d))"
+# if origin is corrupt, restore that file from a clean laptop working copy and push.
+```
+
+The `.venv` is a prime corruption target (thousands of small files). You never *restore* a venv — delete and rebuild (this is also the §1 `ModuleNotFoundError` fix):
+
+```bash
+cd /home/grims/shipwall
+rm -rf .venv
+python3 -m venv .venv
+.venv/bin/pip install --no-cache-dir --retries 5 aiohttp websockets pyserial   # or -r requirements.txt
+.venv/bin/python3 -c "import aiohttp, websockets, serial; print('deps OK')"
+.venv/bin/python3 -c "import register_service; print('imports OK')"
+```
+
+> A pip `Error -3 while decompressing data: invalid block type` is a **network** decompression failure (flaky cottage link), not the card — just retry.
+
+### 8d. Restore corrupted DATA files (not in git)
+
+Data files are gitignored in the code repo — restore from the `shipwall-data` backup repo (8g) or a laptop copy. **Hard-learned rule:** verify the replacement is clean *in its own name* on the Pi **before** renaming it into place. On 2026-07-11 we repeatedly renamed corrupt files over corrupt files blind, because a file's clean-looking header hides nulls further down.
+
+```bash
+cd /home/grims/shipwall
+# get a candidate onto the Pi under a DISTINCT name, then VERIFY it first:
+#   scp <laptop>\shipwall-backup\register.csv grims@shipwall:~/shipwall/register_GOOD.csv
+#   (or: cp ~/shipwall-data/register.csv register_GOOD.csv)
+python3 -c "d=open('register_GOOD.csv','rb').read(); print('candidate:', 'CORRUPT' if b'\x00' in d else 'CLEAN', len(d))"
+head -1 register_GOOD.csv
+
+# ONLY if CLEAN, swap it in (stop the service so it isn't appending during the swap):
+sudo systemctl stop shipwall.service
+mv register.csv register.csv.corrupt-$(date +%s)     # keep the corrupt one, don't delete
+mv register_GOOD.csv register.csv
+python3 -c "d=open('register.csv','rb').read(); print('now:', 'CORRUPT' if b'\x00' in d else 'CLEAN', len(d))"
+sudo systemctl start shipwall.service
+```
+
+**Salvage** a lightly-corrupted file instead of using a stale backup — strip the nulls and keep valid rows (this recovered `register.csv` nearly whole on 2026-07-11, losing ~100 bytes instead of falling back weeks):
+
+```bash
+tr -d '\000' < register.csv.corrupt-* \
+  | grep -aE '^timestamp,|^[0-9]{4}-[0-9]{2}-[0-9]{2}T' > register_salvaged.csv
+python3 -c "d=open('register_salvaged.csv','rb').read(); print('salvaged:', 'CORRUPT' if b'\x00' in d else 'CLEAN', len(d))"
+wc -l register_salvaged.csv
+```
+
+**Priority order under pressure:** `passages.csv` is the **irreplaceable** hand-curated crossing history — protect it first. `register.csv` is the **regenerable** coverage log (rebuilt live from AIS) — losing rows is harmless; it refills. Don't burn time salvaging `register.csv` if `passages.csv` is the one at risk.
+
+### 8e. "The board is sparse after a restart" — usually NOT broken
+
+The last-18h warm-start only shows vessels whose last sighting is within `REGISTER_HOURS`. If the service was **down** for hours (crash-loop, outage), that window genuinely has a hole — the wall couldn't see ships while it was down. It refills live. Before assuming breakage:
+
+```bash
+curl -s localhost:8080/latest | python3 -c "import sys,json,time; d=json.load(sys.stdin); print('feed age', int(time.time()-d['ts']) if d['ts'] else 'NO DATA', 's | ships', len(d['ships']))"
+journalctl -u shipwall.service --no-pager | grep -iE '\[seed\]|\[backfill\]|warm' | tail
+
+# how much recent data is actually in the window (gaps = downtime, not a bug):
+python3 -c "import csv,datetime as dt; c=(dt.datetime.now()-dt.timedelta(hours=18)).isoformat(); r=[x for x in csv.DictReader(open('register.csv')) if x['timestamp']>=c]; print(len(r),'rows /',len({x['mmsi'] for x in r}),'vessels in 18h')"
+```
+
+Passage-logging check (passages are **rare** — an old `passages.csv` timestamp is often normal, not a fault): `tail -3 passages.csv`, then grep the journal for `[passage]` / `[backfill]` lines to confirm the machinery ran. Watch for a passage with a huge `gap_min` (hundreds/thousands of minutes) — that's a crossing *interpolated across a downtime gap*; recorded correctly, but the `pass_time` is a low-confidence guess.
+
+### 8f. If the card really is failing (8a came back bad)
+
+You can only reach this box remotely, so a failing card is the one thing SSH **can't** fix — it needs hands at the cottage. What you *can* do remotely:
+
+- Salvage every still-clean file off it **now** (8b to identify clean ones, `scp` them to the laptop).
+- Minimize writes — stop the crash-looping service so it stops hammering the card.
+- **Don't reboot** if the data isn't backed up (a corrupt root may not boot again).
+
+Then the rebuild needs a fresh high-endurance card physically installed: flash OS, `git clone` the code repo, run `restore.sh` (in the repo) to drop the backed-up data files in, recreate `.env` (the `AISSTREAM_KEY` — §7), rebuild `.venv`, reinstall the systemd units. All the code is on GitHub and all the data is in `shipwall-data`, so a rebuild loses nothing but the hours since the last backup.
+
+### 8g. Offsite data backup — `shipwall-data` (the thing that saved us)
+
+The runtime data files (`passages.csv`, `register.csv`, `mmsi_database.json`, etc.) are gitignored in the code repo — so they have their **own** private backup repo, `bsullgrim/shipwall-data`, pushed on a timer. This is what turned 2026-07-11 from a data-loss catastrophe into "restore from a few hours ago." It lives at `~/shipwall-data` on the Pi; `backup.sh` (in the code repo) copies the data files in and commits/pushes; a systemd timer runs it every 3 hours.
+
+**Install (one-time):**
+
+```bash
+# create the PRIVATE repo on GitHub first, then:
+mkdir -p ~/shipwall-data && cd ~/shipwall-data
+git init && git branch -M main
+git remote add origin git@github.com:bsullgrim/shipwall-data.git   # SSH, not HTTPS
+git config user.email "grimsley.ben@gmail.com" && git config user.name "Ben Grimsley"
+cd ~/shipwall && chmod +x backup.sh
+sed -i 's/OnUnitActiveSec=6h/OnUnitActiveSec=3h/' shipwall-backup.timer   # 3h cadence
+sudo cp shipwall-backup.service shipwall-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shipwall-backup.timer
+```
+
+**Verify it actually reaches GitHub** — backups committing *locally* but not *pushing* is a silent failure (GitHub shows stale timestamps while commits pile up on the very card you're protecting against — this exact thing happened on 2026-07-11):
+
+```bash
+sudo systemctl start shipwall-backup.service          # a timer with blank NEXT needs one manual run to anchor
+journalctl -u shipwall-backup.service -n 20 --no-pager
+systemctl list-timers shipwall-backup.timer           # NEXT should now show ~3h out
+cd ~/shipwall-data && git log origin/main..HEAD --oneline   # EMPTY = all pushed; non-empty = backlog stuck
+```
+
+**Gotchas (all hit on 2026-07-11):**
+
+- **systemd has no ssh-agent:** the push needs a **passphrase-free** on-disk SSH key, and the remote must be **SSH** (`git@github.com:...`), not HTTPS. Test: `ssh -T git@github.com`.
+- **Push rejected `(fetch first)`** = the remote diverged (a web-UI edit, or a push from the laptop). `backup.sh` now self-heals this (`pull --rebase` then retry); to fix by hand: `cd ~/shipwall-data && git pull --rebase origin main && git push origin main`.
+- **`backup.sh` refuses to commit a NUL-corrupt file** (keeps the last good copy) so a backup taken right after corruption can't overwrite a clean one. Confirm the running copy has both guards: `grep -c 'is CORRUPT' backup.sh ; grep -c 'attempting pull --rebase' backup.sh` (both → 1).
+
+**Restore *from* this repo on a fresh card:** `git clone` it alongside the code repo, then `restore.sh` reads the data files out of it (or `scp` them). See 8f.
+
+### 8h. Root cause — stop the power-cuts
+
+The whole incident was a physical unplug interrupting writes. Mitigations, by impact:
+
+- **A small UPS / USB power bank inline** lets the Pi ride out a yank or shut down cleanly. Biggest single lever, and it also kills the reboot clock-skew window (§3).
+- `vcgencmd get_throttled` == `0x0` confirms current power is clean; nonzero = suspect the supply.
+- **TODO:** harden the asset loaders (`load_font` / `load_sprites` / `load_emmett_data`) with `errors="replace"` + try/except, so **one** corrupt byte degrades to a missing glyph instead of crash-looping the whole web app — on 2026-07-11 a corrupt `font5x7.js` took the entire site down, which it never should.
