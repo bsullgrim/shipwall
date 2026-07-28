@@ -22,7 +22,11 @@
  *   BOARD   -- departure-board list of the register (mini chip + code + dir + name + age).
  *   DETAIL  -- one ship full-screen: 32px funnel left, AIS fields right; cycles.
  *   EMMETT  -- "Where's Emmett": shown when the frame carries a non-null emmett object.
- *   IDLE / CLOSED / WAITING cover every other state so the panel is never blank.
+ *   SLEEP   -- frame carries bright:0 (schedule.py overnight window): the panel
+ *              is held black ON PURPOSE. Zero LED current is the LED-longevity
+ *              and PSU-stress lever.
+ *   IDLE / CLOSED / WAITING cover every other state so the panel is never blank
+ *   unless deliberately asleep.
  */
 
 #include <Adafruit_Protomatter.h>
@@ -184,7 +188,9 @@ bool applyFrame(const char* json, size_t len) {
   gClosed = doc["closed"] | false;
   gHours  = doc["hours"]  | 18.0f;
   gHome   = doc["home"]   | 0.5f;
-  // (gBright is parsed but not applied: Protomatter has no runtime brightness.)
+  // gBright == 0 means "display off" and IS applied (sleep gate in loop()).
+  // Nonzero dim levels remain a no-op: Protomatter has no runtime brightness
+  // control, so real dimming would need pixel-color scaling before drawing.
 
   JsonArray arr = doc["ships"].as<JsonArray>();
   shipCount = 0;
@@ -430,9 +436,10 @@ void setup() {
   }
   matrix.fillScreen(0);
   // NOTE: Protomatter has no runtime brightness control (unlike the DMA lib's
-  // setBrightness8). The frame's "bright" field is therefore a no-op on the
-  // panel for now; if dimming is wanted later it must be done by scaling pixel
-  // colors before drawing.
+  // setBrightness8), so intermediate "bright" values are still a no-op; real
+  // dimming would need pixel-color scaling before drawing. The ONE applied
+  // value is bright == 0: loop() treats it as overnight display-off and holds
+  // the panel black (see the sleep gate at the top of loop()).
 
   // Palette matched to register_panel.py mock (C and C2 objects).
   C_NAME   = matrix.color565(255, 200,  40);   // #ffc828 amber
@@ -456,7 +463,24 @@ void loop() {
   uint32_t nowMs = millis();
   matrix.fillScreen(0);
 
-  if (!gotFirstFrame) {
+  // ---- Overnight display-off (bright:0 from schedule.py's sleep window) -----
+  // Draw NOTHING and let the cleared back buffer go out via matrix.show():
+  // an all-black frame means zero current through the LEDs, which is where
+  // essentially all LED aging and PSU stress comes from (shift registers still
+  // clock; that wear is negligible). The gate deliberately covers EVERY screen,
+  // including WAITING/CLOSED: if the Pi dies mid-night, gBright keeps its last
+  // value (0) and the panel stays dark instead of lighting up "WAITING" at 3am
+  // -- it then stays dark until a frame with bright > 0 arrives, so a dead Pi
+  // shows as a dark panel in the morning (webapp / heartbeat cover diagnosis).
+  // Known gap: an ESP32 power-blip reset at night shows STARTING UP for the
+  // few seconds until the next frame re-asserts bright:0 (no RTC on board).
+  // pumpSerial() and the heartbeat below keep running while asleep, so wake-up
+  // latency is one frame and Pi-side liveness monitoring is unaffected.
+  bool asleep = gotFirstFrame && gBright == 0;
+
+  if (asleep) {
+    // nothing drawn: black back buffer -> panel off
+  } else if (!gotFirstFrame) {
     // Cold boot: panel up, Pi hasn't sent a frame yet (the Pi takes 30-90s on a
     // 3B to boot, start the service, connect and warm-start). Showing this, not
     // "REGISTER CLEAR", tells anyone looking it's starting up, not broken.
