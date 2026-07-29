@@ -50,7 +50,6 @@ DATA_FILES=(
     config.json
     LIVERY_PALETTES.json
     CANON_MASK_SPANS.json
-    mmsi_db.json
 )
 
 # Sprite assets that live in the Arduino sketch dir (ship_sprites.h) are in the
@@ -115,30 +114,44 @@ cat <<EOF
 
 ==> Data layer done. Remaining steps to a running wall:
 
-  1. Recreate .env (your AISSTREAM_KEY etc.) -- NOT in any repo:
-       nano $DEST/.env
-       # AISSTREAM_KEY=...
+  1. Secrets -- .env is in no repo:
+       cp $DEST/.env.example $DEST/.env && nano $DEST/.env
+       # AISSTREAM_KEY=...   (the service exits at startup without it)
 
-  2. Rebuild the Python venv:
-       cd $DEST
-       python3 -m venv .venv
-       .venv/bin/pip install -r requirements.txt   # or: aiohttp websockets pyserial ...
+  2. Python venv (the units run .venv/bin/python3):
+       cd $DEST && python3 -m venv .venv
+       .venv/bin/pip install -r requirements.txt
 
-  3. Install + enable the systemd units (from your backup or the repo):
-       sudo cp $DEST/systemd/*.service $DEST/systemd/*.timer /etc/systemd/system/ 2>/dev/null \\
-         || echo "   (units not in repo -- copy them from your backup folder)"
+  3. Exec bits (git core.filemode is false here -- don't trust the clone):
+       chmod +x $DEST/*.sh $DEST/gen_emmett_header.py
+
+  4. udev rule -- without this there is no /dev/shipwall-panel:
+       sudo cp $DEST/udev/*.rules /etc/udev/rules.d/
+       sudo udevadm control --reload && sudo udevadm trigger
+       ls -l /dev/shipwall-panel
+
+  5. systemd units + the MIRROR_HOST drop-in:
+       sudo cp $DEST/systemd/*.service $DEST/systemd/*.timer /etc/systemd/system/
+       sudo cp -r $DEST/systemd/shipwall.service.d /etc/systemd/system/
        sudo systemctl daemon-reload
-       sudo systemctl enable --now shipwall.service shipwall-web.service
-       sudo systemctl enable --now shipwall-backup.timer   # so backups run from day one
+       sudo systemctl enable --now shipwall shipwall-web \\
+            shipwall-backup.timer panel-watchdog.timer shipwall-clean.timer
 
-  4. Set the mirror + confirm:
-       # MIRROR_HOST drop-in on shipwall.service:
-       sudo systemctl edit shipwall.service    # add: [Service]\\nEnvironment=MIRROR_HOST=localhost:8080
-       sudo systemctl daemon-reload && sudo systemctl restart shipwall.service
-       curl -s localhost:8080/latest           # ts should go non-zero within ~10s
+  6. Git remote over SSH (HTTPS needs a token; backups push via git):
+       cd $DEST && git remote set-url origin git@github.com:bsullgrim/shipwall.git
+       ssh -T git@github.com
 
-  5. Re-expose publicly:
+  7. Firmware, only if reflashing the ESP32:
+       $DEST/.venv/bin/python3 $DEST/gen_emmett_header.py   # writes register_esp32/emmett_data.h
+       sudo systemctl stop panel-watchdog.timer shipwall    # or they grab the port mid-flash
+
+  8. Re-expose publicly:
        sudo tailscale funnel --bg 8080
+
+  9. VERIFY -- installed is not running:
+       systemctl is-enabled shipwall shipwall-web shipwall-backup.timer panel-watchdog.timer
+       journalctl -u shipwall -n 20 --no-pager      # want: [ais] subscribed, [heartbeat]
+       curl -s localhost:8080/latest | head -c 60   # ts non-zero within ~10s
 
 EOF
 echo "==> restore complete."
