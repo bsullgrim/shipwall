@@ -1,0 +1,26 @@
+[Unit]
+Description=St. Lawrence Ship Wall AIS service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=grims
+WorkingDirectory=/home/grims/shipwall
+Environment=REGISTER_HOURS=18
+Environment=REGISTER_LOG=/home/grims/shipwall/register.csv
+Environment=PASSAGE_LOG=/home/grims/shipwall/passages.csv
+Environment=MMSI_DB=/home/grims/shipwall/mmsi_database.json
+Environment=ESP32_SERIAL=/dev/shipwall-panel
+Environment=EMMETT_MMSI=338021074
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/grims/shipwall/.venv/bin/python3 /home/grims/shipwall/register_service.py
+Restart=always
+RestartSec=15
+SupplementaryGroups=dialout
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

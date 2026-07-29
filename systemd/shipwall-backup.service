@@ -1,0 +1,29 @@
+[Unit]
+Description=Ship Wall data backup -- snapshot logs to the private data repo
+Documentation=https://github.com/bsullgrim/shipwall
+# Don't run if there's no network (the push would fail); Wants (not Requires) so
+# a brief network hiccup doesn't block a local commit.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=grims
+WorkingDirectory=/home/grims/shipwall
+ExecStart=/home/grims/shipwall/backup.sh
+
+# Config (must match backup.sh's expectations / your paths):
+Environment=SRC_DIR=/home/grims/shipwall
+Environment=BACKUP_REPO=/home/grims/shipwall-data
+Environment=BACKUP_BRANCH=main
+Environment=BACKUP_PUSH=1
+
+# Don't let a wedged git/network call hang forever.
+TimeoutStartSec=120
+
+# Cheap, safe hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -7,8 +7,7 @@ Documentation=https://github.com/bsullgrim/shipwall
 # snapshot). Given the current card situation you may want this MORE often --
 # change to e.g. OnCalendar=hourly. It only commits when data actually changed,
 # so frequent runs on quiet nights cost almost nothing.
-OnBootSec=10min
-OnUnitActiveSec=3h
+OnCalendar=hourly
 
 # Don't stack runs if one is slow; skip missed runs rather than bursting.
 Persistent=true

@@ -1,0 +1,6 @@
+[Unit]
+Description=Ship Wall panel USB watchdog
+After=shipwall.service
+[Service]
+Type=oneshot
+ExecStart=/home/grims/shipwall/panel-watchdog.sh
